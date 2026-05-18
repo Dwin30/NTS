@@ -9,6 +9,7 @@ const fs = require('fs');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer');
 
 dotenv.config();
 
@@ -17,10 +18,127 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIO(server, {
   cors: {
-    origin: "http://localhost:3000",
+    origin: process.env.FRONTEND_URL || "http://localhost:3000",
     credentials: true
   }
 });
+
+// ============ EMAIL CONFIGURATION ============
+// Create email transporter
+const emailTransporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
+});
+
+// Function to send OTP email
+const sendOTPEmail = async (toEmail, otp, type = 'verification') => {
+  const subject = type === 'verification' ? 'Verify Your NTS Account' : 'Reset Your NTS Password';
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>NTS OTP Verification</title>
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          background-color: #f4f4f4;
+          margin: 0;
+          padding: 0;
+        }
+        .container {
+          max-width: 500px;
+          margin: 50px auto;
+          background: white;
+          border-radius: 10px;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+          overflow: hidden;
+        }
+        .header {
+          background: linear-gradient(135deg, #059669, #047857);
+          padding: 30px;
+          text-align: center;
+        }
+        .header h1 {
+          color: white;
+          margin: 0;
+          font-size: 28px;
+        }
+        .content {
+          padding: 30px;
+          text-align: center;
+        }
+        .otp-code {
+          font-size: 48px;
+          font-weight: bold;
+          color: #059669;
+          letter-spacing: 10px;
+          background: #f0fdf4;
+          padding: 20px;
+          border-radius: 10px;
+          margin: 20px 0;
+          font-family: monospace;
+        }
+        .message {
+          color: #374151;
+          line-height: 1.6;
+          margin-bottom: 20px;
+        }
+        .footer {
+          background: #f9fafb;
+          padding: 20px;
+          text-align: center;
+          color: #6b7280;
+          font-size: 12px;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>NTS Platform</h1>
+        </div>
+        <div class="content">
+          <h2>${type === 'verification' ? 'Email Verification' : 'Password Reset'}</h2>
+          <p class="message">
+            ${type === 'verification' 
+              ? 'Thank you for registering with NTS Platform. Please use the following OTP to verify your email address:' 
+              : 'We received a request to reset your password. Use the following OTP to proceed:'}
+          </p>
+          <div class="otp-code">${otp}</div>
+          <p class="message">
+            This OTP is valid for 10 minutes.<br>
+            If you didn't request this, please ignore this email.
+          </p>
+        </div>
+        <div class="footer">
+          <p>&copy; ${new Date().getFullYear()} NTS Platform. All rights reserved.</p>
+          <p>NEZERWA TECH SOLUTION</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const mailOptions = {
+    from: `"NTS Platform" <${process.env.EMAIL_USER}>`,
+    to: toEmail,
+    subject: subject,
+    html: html
+  };
+
+  try {
+    const info = await emailTransporter.sendMail(mailOptions);
+    console.log(`✅ OTP email sent to ${toEmail} - Message ID: ${info.messageId}`);
+    return true;
+  } catch (error) {
+    console.error('❌ Email sending error:', error);
+    return false;
+  }
+};
 
 // ============ MULTER SETUP ============
 const uploadDir = path.join(__dirname, 'uploads');
@@ -40,7 +158,7 @@ const upload = multer({
 });
 
 // ============ MIDDLEWARE ============
-app.use(cors({ origin: "http://localhost:3000", credentials: true }));
+app.use(cors({ origin: process.env.FRONTEND_URL || "http://localhost:3000", credentials: true }));
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 app.use('/uploads', express.static(uploadDir));
@@ -63,6 +181,8 @@ const authenticate = (req, res, next) => {
 };
 
 // ============ AUTH ROUTES ============
+
+// Register - Sends OTP to user's email
 app.post('/api/auth/register', async (req, res) => {
   const { email, fullName, password, role, phone, school } = req.body;
   
@@ -90,21 +210,31 @@ app.post('/api/auth/register', async (req, res) => {
       }
     });
     
-    console.log(`\n========== OTP for ${email} ==========`);
-    console.log(`Code: ${otp}`);
-    console.log(`=====================================\n`);
+    // Send OTP via email
+    const emailSent = await sendOTPEmail(email, otp, 'verification');
     
-    res.status(201).json({ 
-      message: 'Registration successful! Check terminal for OTP', 
-      userId: user.id, 
-      email: user.email 
-    });
+    if (emailSent) {
+      console.log(`✅ OTP sent to ${email}`);
+      res.status(201).json({ 
+        message: 'Registration successful! OTP sent to your email', 
+        userId: user.id, 
+        email: user.email 
+      });
+    } else {
+      console.log(`❌ Failed to send OTP to ${email}`);
+      res.status(201).json({ 
+        message: 'Registration successful! But OTP email failed. Please check console.', 
+        userId: user.id, 
+        email: user.email 
+      });
+    }
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Registration failed' });
   }
 });
 
+// Verify OTP
 app.post('/api/auth/verify-otp', async (req, res) => {
   const { email, otp } = req.body;
   
@@ -147,6 +277,7 @@ app.post('/api/auth/verify-otp', async (req, res) => {
   }
 });
 
+// Login
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
   
@@ -190,6 +321,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// Forgot Password - Sends OTP to user's email
 app.post('/api/auth/forgot-password', async (req, res) => {
   const { email } = req.body;
   
@@ -205,17 +337,21 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       data: { otpCode: otp, otpExpiresAt }
     });
     
-    console.log(`\n========== PASSWORD RESET CODE ==========`);
-    console.log(`Email: ${email}`);
-    console.log(`Code: ${otp}`);
-    console.log(`=========================================\n`);
+    // Send OTP via email
+    const emailSent = await sendOTPEmail(email, otp, 'reset');
     
-    res.json({ message: 'Reset code sent' });
+    if (emailSent) {
+      console.log(`✅ Password reset OTP sent to ${email}`);
+      res.json({ message: 'Reset code sent to your email' });
+    } else {
+      res.status(500).json({ error: 'Failed to send email' });
+    }
   } catch (error) {
     res.status(500).json({ error: 'Failed to send reset code' });
   }
 });
 
+// Reset Password
 app.post('/api/auth/reset-password', async (req, res) => {
   const { email, otp, newPassword } = req.body;
   
@@ -237,6 +373,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
   }
 });
 
+// Change Password
 app.post('/api/auth/change-password', authenticate, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
   
@@ -701,8 +838,6 @@ app.get('/api/chat/:chatId/messages', authenticate, async (req, res) => {
   }
 });
 
-// Send message - MAKE SURE isRead is set to false
-// Send message - FIXED: Ensure isRead is false for ALL new messages
 app.post('/api/chat/messages', authenticate, async (req, res) => {
   const { chatId, content, receiverId, fileUrl, fileType, fileName, replyToId } = req.body;
   
@@ -717,7 +852,7 @@ app.post('/api/chat/messages', authenticate, async (req, res) => {
         fileType, 
         fileName, 
         replyToId, 
-        isRead: false,  // ← MUST be false for EVERY new message
+        isRead: false,
         isDeleted: false 
       },
       include: { 
@@ -728,7 +863,6 @@ app.post('/api/chat/messages', authenticate, async (req, res) => {
     
     console.log(`New message created: ID ${message.id}, isRead: ${message.isRead}`);
     
-    // Emit to receiver
     io.to(`user:${receiverId}`).emit('message:received', message);
     
     res.status(201).json(message);
@@ -737,6 +871,7 @@ app.post('/api/chat/messages', authenticate, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
 app.put('/api/chat/messages/:messageId', authenticate, async (req, res) => {
   const { messageId } = req.params;
   const { content } = req.body;
@@ -1086,12 +1221,10 @@ io.on('connection', (socket) => {
   socket.join(`user:${socket.userId}`);
   io.emit('users:online', Array.from(onlineUsers.keys()));
 
-  // Add this with other socket events
-socket.on('application:submitted', (data) => {
-  console.log(`Application submitted for internship ${data.internshipId} by user ${socket.userId}`);
-  // Notify admin
-  io.emit('application:new', data);
-});
+  socket.on('application:submitted', (data) => {
+    console.log(`Application submitted for internship ${data.internshipId} by user ${socket.userId}`);
+    io.emit('application:new', data);
+  });
   
   socket.on('message:send', (data) => {
     const receiverSocketId = onlineUsers.get(data.receiverId);
@@ -1100,33 +1233,35 @@ socket.on('application:submitted', (data) => {
     }
   });
 
-  // Call signaling events
-socket.on('call:offer', (data) => {
-  console.log('📞 Call offer from', socket.userId, 'to', data.to);
-  io.to(`user:${data.to}`).emit('call:incoming', {
-    fromId: socket.userId,
-    fromName: data.fromName,
-    offer: data.offer
+  socket.on('call:offer', (data) => {
+    console.log('📞 Call offer from', socket.userId, 'to', data.to);
+    io.to(`user:${data.to}`).emit('call:incoming', {
+      fromId: socket.userId,
+      fromName: data.fromName,
+      offer: data.offer
+    });
   });
-});
 
-socket.on('call:accepted', (data) => {
-  console.log('✅ Call accepted from', socket.userId, 'to', data.to);
-  io.to(`user:${data.to}`).emit('call:accepted');
-});
-socket.on('call:reject', (data) => {
-  console.log('❌ Call rejected from', socket.userId, 'to', data.to);
-  io.to(`user:${data.to}`).emit('call:rejected');
-});
+  socket.on('call:accepted', (data) => {
+    console.log('✅ Call accepted from', socket.userId, 'to', data.to);
+    io.to(`user:${data.to}`).emit('call:accepted');
+  });
 
-socket.on('call:answer', (data) => {
-  console.log('📞 Call answer from', socket.userId, 'to', data.to);
-  io.to(`user:${data.to}`).emit('call:answer', { answer: data.answer });
-});
-socket.on('call:ice-candidate', (data) => {
-  console.log('🧊 ICE candidate from', socket.userId, 'to', data.to);
-  io.to(`user:${data.to}`).emit('call:ice-candidate', { candidate: data.candidate });
-});
+  socket.on('call:reject', (data) => {
+    console.log('❌ Call rejected from', socket.userId, 'to', data.to);
+    io.to(`user:${data.to}`).emit('call:rejected');
+  });
+
+  socket.on('call:answer', (data) => {
+    console.log('📞 Call answer from', socket.userId, 'to', data.to);
+    io.to(`user:${data.to}`).emit('call:answer', { answer: data.answer });
+  });
+
+  socket.on('call:ice-candidate', (data) => {
+    console.log('🧊 ICE candidate from', socket.userId, 'to', data.to);
+    io.to(`user:${data.to}`).emit('call:ice-candidate', { candidate: data.candidate });
+  });
+
   socket.on('message:edit', (data) => {
     const receiverSocketId = onlineUsers.get(data.receiverId);
     if (receiverSocketId) {
@@ -1148,11 +1283,10 @@ socket.on('call:ice-candidate', (data) => {
     }
   });
 
-  // Add inside io.on('connection', (socket) => { ... })
-socket.on('application:status:updated', (data) => {
-  console.log(`Application status updated to ${data.status} for student ${data.studentId}`);
-  io.to(`user:${data.studentId}`).emit('application:status:updated', data);
-});
+  socket.on('application:status:updated', (data) => {
+    console.log(`Application status updated to ${data.status} for student ${data.studentId}`);
+    io.to(`user:${data.studentId}`).emit('application:status:updated', data);
+  });
   
   socket.on('typing:stop', ({ receiverId }) => {
     const receiverSocketId = onlineUsers.get(receiverId);
@@ -1188,7 +1322,9 @@ async function createDefaultAdmin() {
   }
 }
 
-// Get student's own applications (FIXED - accessible by students)
+// ============ ADDITIONAL ROUTES ============
+
+// Get student's own applications
 app.get('/api/my-applications', authenticate, async (req, res) => {
   try {
     const applications = await prisma.internshipApplication.findMany({
@@ -1201,7 +1337,7 @@ app.get('/api/my-applications', authenticate, async (req, res) => {
   }
 });
 
-// Withdraw application
+// Withdraw application (SINGLE - NO DUPLICATE)
 app.delete('/api/applications/:applicationId', authenticate, async (req, res) => {
   const { applicationId } = req.params;
   
@@ -1221,26 +1357,7 @@ app.delete('/api/applications/:applicationId', authenticate, async (req, res) =>
     res.status(500).json({ error: error.message });
   }
 });
-// Withdraw application
-app.delete('/api/applications/:applicationId', authenticate, async (req, res) => {
-  const { applicationId } = req.params;
-  
-  try {
-    const application = await prisma.internshipApplication.findUnique({
-      where: { id: applicationId }
-    });
-    
-    if (!application) return res.status(404).json({ error: 'Application not found' });
-    if (application.studentId !== req.user.id && req.user.role !== 'ADMIN') {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-    
-    await prisma.internshipApplication.delete({ where: { id: applicationId } });
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+
 // ============ START SERVER ============
 const PORT = process.env.PORT || 5000;
 createDefaultAdmin().then(() => {
