@@ -1100,6 +1100,31 @@ io.on('connection', (socket) => {
       io.to(receiverSocketId).emit('message:received', data.message);
     }
   });
+
+  // Call signaling events
+socket.on('call:offer', (data) => {
+  socket.to(`user:${data.to}`).emit('call:incoming', {
+    fromId: socket.userId,
+    fromName: data.fromName,
+    offer: data.offer
+  });
+});
+
+socket.on('call:accepted', (data) => {
+  socket.to(`user:${data.to}`).emit('call:accepted', { from: socket.userId });
+});
+
+socket.on('call:reject', (data) => {
+  socket.to(`user:${data.to}`).emit('call:rejected');
+});
+
+socket.on('call:answer', (data) => {
+  socket.to(`user:${data.to}`).emit('call:answer', { answer: data.answer });
+});
+
+socket.on('call:ice-candidate', (data) => {
+  socket.to(`user:${data.to}`).emit('call:ice-candidate', { candidate: data.candidate });
+});
   
   socket.on('message:edit', (data) => {
     const receiverSocketId = onlineUsers.get(data.receiverId);
