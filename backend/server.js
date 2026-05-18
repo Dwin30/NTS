@@ -701,42 +701,35 @@ app.get('/api/chat/:chatId/messages', authenticate, async (req, res) => {
   }
 });
 
+// Send message - MAKE SURE isRead is set to false
+// Send message - FIXED: Ensure isRead is false for ALL new messages
 app.post('/api/chat/messages', authenticate, async (req, res) => {
   const { chatId, content, receiverId, fileUrl, fileType, fileName, replyToId } = req.body;
   
   try {
     const message = await prisma.message.create({
-      data: {
-        content: content || (fileUrl ? `📎 ${fileName || 'File'}` : ''),
-        senderId: req.user.id,
-        receiverId,
-        chatId,
-        fileUrl,
-        fileType,
-        fileName,
-        replyToId,
-        isRead: false,
-        isDeleted: false
+      data: { 
+        content: content || (fileUrl ? `📎 ${fileName || 'File'}` : ''), 
+        senderId: req.user.id, 
+        receiverId, 
+        chatId, 
+        fileUrl, 
+        fileType, 
+        fileName, 
+        replyToId, 
+        isRead: false,  // ← MUST be false for EVERY new message
+        isDeleted: false 
       },
-      include: {
-        sender: {
-          select: { id: true, fullName: true, avatar: true }
-        },
-        replyTo: {
-          include: {
-            sender: {
-              select: { id: true, fullName: true }
-            }
-          }
-        }
+      include: { 
+        sender: { select: { id: true, fullName: true, avatar: true } }, 
+        replyTo: { include: { sender: { select: { id: true, fullName: true } } } } 
       }
     });
     
-    // Emit to receiver via Socket.IO
-    const receiverSocketId = onlineUsers.get(receiverId);
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit('message:received', message);
-    }
+    console.log(`New message created: ID ${message.id}, isRead: ${message.isRead}`);
+    
+    // Emit to receiver
+    io.to(`user:${receiverId}`).emit('message:received', message);
     
     res.status(201).json(message);
   } catch (error) {
@@ -744,7 +737,6 @@ app.post('/api/chat/messages', authenticate, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
 app.put('/api/chat/messages/:messageId', authenticate, async (req, res) => {
   const { messageId } = req.params;
   const { content } = req.body;
@@ -1103,7 +1095,8 @@ io.on('connection', (socket) => {
 
   // Call signaling events
 socket.on('call:offer', (data) => {
-  socket.to(`user:${data.to}`).emit('call:incoming', {
+  console.log('📞 Call offer from', socket.userId, 'to', data.to);
+  io.to(`user:${data.to}`).emit('call:incoming', {
     fromId: socket.userId,
     fromName: data.fromName,
     offer: data.offer
@@ -1111,21 +1104,22 @@ socket.on('call:offer', (data) => {
 });
 
 socket.on('call:accepted', (data) => {
-  socket.to(`user:${data.to}`).emit('call:accepted', { from: socket.userId });
+  console.log('✅ Call accepted from', socket.userId, 'to', data.to);
+  io.to(`user:${data.to}`).emit('call:accepted');
 });
-
 socket.on('call:reject', (data) => {
-  socket.to(`user:${data.to}`).emit('call:rejected');
+  console.log('❌ Call rejected from', socket.userId, 'to', data.to);
+  io.to(`user:${data.to}`).emit('call:rejected');
 });
 
 socket.on('call:answer', (data) => {
-  socket.to(`user:${data.to}`).emit('call:answer', { answer: data.answer });
+  console.log('📞 Call answer from', socket.userId, 'to', data.to);
+  io.to(`user:${data.to}`).emit('call:answer', { answer: data.answer });
 });
-
 socket.on('call:ice-candidate', (data) => {
-  socket.to(`user:${data.to}`).emit('call:ice-candidate', { candidate: data.candidate });
+  console.log('🧊 ICE candidate from', socket.userId, 'to', data.to);
+  io.to(`user:${data.to}`).emit('call:ice-candidate', { candidate: data.candidate });
 });
-  
   socket.on('message:edit', (data) => {
     const receiverSocketId = onlineUsers.get(data.receiverId);
     if (receiverSocketId) {
