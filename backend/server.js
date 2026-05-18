@@ -1358,6 +1358,20 @@ app.delete('/api/applications/:applicationId', authenticate, async (req, res) =>
   }
 });
 
+// Get admin contact info for students
+app.get('/api/admin/contact', authenticate, async (req, res) => {
+  try {
+    const admin = await prisma.user.findFirst({
+      where: { role: 'ADMIN' },
+      select: { id: true, fullName: true, email: true }
+    });
+    if (!admin) return res.status(404).json({ error: 'No admin found' });
+    res.json(admin);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============ START SERVER ============
 const PORT = process.env.PORT || 5000;
 createDefaultAdmin().then(() => {
