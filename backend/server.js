@@ -1085,6 +1085,13 @@ io.on('connection', (socket) => {
   onlineUsers.set(socket.userId, socket.id);
   socket.join(`user:${socket.userId}`);
   io.emit('users:online', Array.from(onlineUsers.keys()));
+
+  // Add this with other socket events
+socket.on('application:submitted', (data) => {
+  console.log(`Application submitted for internship ${data.internshipId} by user ${socket.userId}`);
+  // Notify admin
+  io.emit('application:new', data);
+});
   
   socket.on('message:send', (data) => {
     const receiverSocketId = onlineUsers.get(data.receiverId);
@@ -1140,6 +1147,12 @@ socket.on('call:ice-candidate', (data) => {
       io.to(receiverSocketId).emit('typing:start', { userId: socket.userId });
     }
   });
+
+  // Add inside io.on('connection', (socket) => { ... })
+socket.on('application:status:updated', (data) => {
+  console.log(`Application status updated to ${data.status} for student ${data.studentId}`);
+  io.to(`user:${data.studentId}`).emit('application:status:updated', data);
+});
   
   socket.on('typing:stop', ({ receiverId }) => {
     const receiverSocketId = onlineUsers.get(receiverId);
@@ -1175,6 +1188,59 @@ async function createDefaultAdmin() {
   }
 }
 
+// Get student's own applications (FIXED - accessible by students)
+app.get('/api/my-applications', authenticate, async (req, res) => {
+  try {
+    const applications = await prisma.internshipApplication.findMany({
+      where: { studentId: req.user.id },
+      include: { internship: true }
+    });
+    res.json(applications);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Withdraw application
+app.delete('/api/applications/:applicationId', authenticate, async (req, res) => {
+  const { applicationId } = req.params;
+  
+  try {
+    const application = await prisma.internshipApplication.findUnique({
+      where: { id: applicationId }
+    });
+    
+    if (!application) return res.status(404).json({ error: 'Application not found' });
+    if (application.studentId !== req.user.id && req.user.role !== 'ADMIN') {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    
+    await prisma.internshipApplication.delete({ where: { id: applicationId } });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+// Withdraw application
+app.delete('/api/applications/:applicationId', authenticate, async (req, res) => {
+  const { applicationId } = req.params;
+  
+  try {
+    const application = await prisma.internshipApplication.findUnique({
+      where: { id: applicationId }
+    });
+    
+    if (!application) return res.status(404).json({ error: 'Application not found' });
+    if (application.studentId !== req.user.id && req.user.role !== 'ADMIN') {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    
+    await prisma.internshipApplication.delete({ where: { id: applicationId } });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 // ============ START SERVER ============
 const PORT = process.env.PORT || 5000;
 createDefaultAdmin().then(() => {
