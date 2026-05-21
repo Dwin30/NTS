@@ -21,6 +21,7 @@ const prisma = new PrismaClient({
     }
   }
 });
+
 const app = express();
 const server = http.createServer(app);
 const io = socketIO(server, {
@@ -1318,21 +1319,27 @@ io.on('connection', (socket) => {
 
 // ============ CREATE DEFAULT ADMIN ============
 async function createDefaultAdmin() {
-  const existingAdmin = await prisma.user.findUnique({
-    where: { email: 'admin@nts.rw' }
-  });
-  if (!existingAdmin) {
-    const passwordHash = await bcrypt.hash('Admin123', 10);
-    await prisma.user.create({
-      data: {
-        email: 'admin@nts.rw',
-        fullName: 'System Administrator',
-        passwordHash,
-        role: 'ADMIN',
-        isVerified: true
-      }
+  try {
+    const existingAdmin = await prisma.user.findUnique({
+      where: { email: 'admin@nts.rw' }
     });
-    console.log('✅ Default admin created: admin@nts.rw / Admin123');
+    if (!existingAdmin) {
+      const passwordHash = await bcrypt.hash('Admin123', 10);
+      await prisma.user.create({
+        data: {
+          email: 'admin@nts.rw',
+          fullName: 'System Administrator',
+          passwordHash,
+          role: 'ADMIN',
+          isVerified: true
+        }
+      });
+      console.log('✅ Default admin created: admin@nts.rw / Admin123');
+    } else {
+      console.log('✅ Admin user already exists');
+    }
+  } catch (error) {
+    console.error('Failed to create default admin:', error.message);
   }
 }
 
@@ -1386,14 +1393,44 @@ app.get('/api/admin/contact', authenticate, async (req, res) => {
   }
 });
 
-// ============ START SERVER ============
+// ============ START SERVER WITH DATABASE SYNC ============
 const PORT = process.env.PORT || 5000;
-createDefaultAdmin().then(() => {
+
+// Function to sync database schema
+async function syncDatabase() {
+  try {
+    await prisma.$connect();
+    console.log('✅ Database connected successfully');
+    
+    // Execute prisma db push to create/update tables
+    const { execSync } = require('child_process');
+    console.log('🔄 Syncing database schema...');
+    execSync('npx prisma db push --accept-data-loss', { stdio: 'inherit' });
+    console.log('✅ Database schema synced successfully');
+    return true;
+  } catch (error) {
+    console.error('❌ Database sync error:', error.message);
+    return false;
+  }
+}
+
+// Start server with database sync
+async function startServer() {
+  const synced = await syncDatabase();
+  
+  if (synced) {
+    await createDefaultAdmin();
+  } else {
+    console.log('⚠️ Database sync failed, but continuing...');
+  }
+  
   server.listen(PORT, () => {
     console.log(`🚀 NTS Server running on http://localhost:${PORT}`);
   });
-}).catch(err => {
-  console.error('Failed to create default admin:', err);
+}
+
+startServer().catch(err => {
+  console.error('Failed to start server:', err.message);
   server.listen(PORT, () => {
     console.log(`🚀 NTS Server running on http://localhost:${PORT}`);
   });
