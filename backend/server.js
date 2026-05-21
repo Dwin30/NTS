@@ -9,6 +9,7 @@ const fs = require('fs');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const axios = require('axios');
 
 dotenv.config();
 
@@ -30,32 +31,11 @@ const io = socketIO(server, {
   }
 });
 
-// ============ BREVO EMAIL CONFIGURATION ==========
-let brevoApiInstance = null;
-let brevoClient = null;
-
-// Initialize Brevo API
-function initBrevo() {
-  if (process.env.BREVO_API_KEY) {
-    try {
-      const brevo = require('@getbrevo/brevo');
-      brevoClient = brevo;
-      const apiInstance = new brevo.TransactionalEmailsApi();
-      apiInstance.setApiKey(brevo.TransactionalEmailsApiApiKeys.apiKey, process.env.BREVO_API_KEY);
-      brevoApiInstance = apiInstance;
-      console.log('✅ Brevo API initialized');
-    } catch (error) {
-      console.error('❌ Failed to initialize Brevo:', error.message);
-    }
-  } else {
-    console.warn('⚠️ BREVO_API_KEY not set, email sending will fail');
-  }
-}
-
-// Function to send OTP email using Brevo API
+// ============ BREVO EMAIL CONFIGURATION (USING AXIOS) ==========
+// Function to send OTP email using Brevo API directly
 const sendOTPEmail = async (toEmail, otp, type = 'verification') => {
-  if (!brevoApiInstance || !brevoClient) {
-    console.error('❌ Brevo API not initialized');
+  if (!process.env.BREVO_API_KEY) {
+    console.error('❌ BREVO_API_KEY not set, email sending will fail');
     return false;
   }
 
@@ -147,18 +127,28 @@ const sendOTPEmail = async (toEmail, otp, type = 'verification') => {
     </html>
   `;
 
-  const sendSmtpEmail = new brevoClient.SendSmtpEmail();
-  sendSmtpEmail.subject = subject;
-  sendSmtpEmail.to = [{ email: toEmail }];
-  sendSmtpEmail.htmlContent = html;
-  sendSmtpEmail.sender = { email: process.env.EMAIL_USER, name: 'NTS Platform' };
+  const data = {
+    sender: { email: process.env.EMAIL_USER, name: 'NTS Platform' },
+    to: [{ email: toEmail }],
+    subject: subject,
+    htmlContent: html
+  };
 
   try {
-    const data = await brevoApiInstance.sendTransacEmail(sendSmtpEmail);
-    console.log(`✅ OTP email sent to ${toEmail} - Message ID: ${data.messageId}`);
+    const response = await axios.post(
+      'https://api.brevo.com/v3/smtp/email',
+      data,
+      {
+        headers: {
+          'api-key': process.env.BREVO_API_KEY,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    console.log(`✅ OTP email sent to ${toEmail} - Message ID: ${response.data.messageId}`);
     return true;
   } catch (error) {
-    console.error('❌ Email sending error:', error);
+    console.error('❌ Email sending error:', error.response?.data || error.message);
     return false;
   }
 };
@@ -1432,7 +1422,6 @@ async function syncDatabase() {
 
 // Start server with database sync
 async function startServer() {
-  initBrevo(); // Initialize Brevo API
   const synced = await syncDatabase();
   
   if (synced) {
