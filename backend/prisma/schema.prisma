@@ -5,7 +5,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = "postgresql://nts_database_user:llGHTWUpCs9N2NqKTkPgdlh4d30UVmlp@dpg-d86ulv6k1jcs739msak0-a:5432/nts_database"
+  url      = "postgresql://nts_database_user:11GHTWUpCs9N2nqKTKp9d1h4d3Q0Vmlp@dpg-d86ulv6k1jcs739msak0-a:5432/nts_database"
 }
 
 model User {
