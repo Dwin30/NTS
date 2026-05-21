@@ -13,7 +13,14 @@ const nodemailer = require('nodemailer');
 
 dotenv.config();
 
-const prisma = new PrismaClient();
+// Hardcoded database URL for Render deployment
+const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url: "postgresql://nts_database_user:11GHtWUpCs9N2nqKTKPgdlh4d30UVmlp@dpg-d86ulv6k1jcs739msak0-a:5432/nts_database"
+    }
+  }
+});
 const app = express();
 const server = http.createServer(app);
 const io = socketIO(server, {
