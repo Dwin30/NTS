@@ -9,7 +9,6 @@ const fs = require('fs');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const brevo = require('@getbrevo/brevo');
 
 dotenv.config();
 
@@ -31,15 +30,23 @@ const io = socketIO(server, {
   }
 });
 
-// ============ BREVO EMAIL CONFIGURATION ============
+// ============ BREVO EMAIL CONFIGURATION ==========
 let brevoApiInstance = null;
+let brevoClient = null;
 
 // Initialize Brevo API
 function initBrevo() {
   if (process.env.BREVO_API_KEY) {
-    brevoApiInstance = new brevo.TransactionalEmailsApi();
-    brevoApiInstance.setApiKey(brevo.TransactionalEmailsApiApiKeys.apiKey, process.env.BREVO_API_KEY);
-    console.log('✅ Brevo API initialized');
+    try {
+      const brevo = require('@getbrevo/brevo');
+      brevoClient = brevo;
+      const apiInstance = new brevo.TransactionalEmailsApi();
+      apiInstance.setApiKey(brevo.TransactionalEmailsApiApiKeys.apiKey, process.env.BREVO_API_KEY);
+      brevoApiInstance = apiInstance;
+      console.log('✅ Brevo API initialized');
+    } catch (error) {
+      console.error('❌ Failed to initialize Brevo:', error.message);
+    }
   } else {
     console.warn('⚠️ BREVO_API_KEY not set, email sending will fail');
   }
@@ -47,7 +54,7 @@ function initBrevo() {
 
 // Function to send OTP email using Brevo API
 const sendOTPEmail = async (toEmail, otp, type = 'verification') => {
-  if (!brevoApiInstance) {
+  if (!brevoApiInstance || !brevoClient) {
     console.error('❌ Brevo API not initialized');
     return false;
   }
@@ -140,7 +147,7 @@ const sendOTPEmail = async (toEmail, otp, type = 'verification') => {
     </html>
   `;
 
-  const sendSmtpEmail = new brevo.SendSmtpEmail();
+  const sendSmtpEmail = new brevoClient.SendSmtpEmail();
   sendSmtpEmail.subject = subject;
   sendSmtpEmail.to = [{ email: toEmail }];
   sendSmtpEmail.htmlContent = html;
