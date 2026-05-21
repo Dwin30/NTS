@@ -9,7 +9,7 @@ const fs = require('fs');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
+const brevo = require('@getbrevo/brevo');
 
 dotenv.config();
 
@@ -21,6 +21,7 @@ const prisma = new PrismaClient({
     }
   }
 });
+
 const app = express();
 const server = http.createServer(app);
 const io = socketIO(server, {
@@ -30,18 +31,27 @@ const io = socketIO(server, {
   }
 });
 
-// ============ EMAIL CONFIGURATION ============
-// Create email transporter
-const emailTransporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
-});
+// ============ BREVO EMAIL CONFIGURATION ============
+let brevoApiInstance = null;
 
-// Function to send OTP email
+// Initialize Brevo API
+function initBrevo() {
+  if (process.env.BREVO_API_KEY) {
+    brevoApiInstance = new brevo.TransactionalEmailsApi();
+    brevoApiInstance.setApiKey(brevo.TransactionalEmailsApiApiKeys.apiKey, process.env.BREVO_API_KEY);
+    console.log('✅ Brevo API initialized');
+  } else {
+    console.warn('⚠️ BREVO_API_KEY not set, email sending will fail');
+  }
+}
+
+// Function to send OTP email using Brevo API
 const sendOTPEmail = async (toEmail, otp, type = 'verification') => {
+  if (!brevoApiInstance) {
+    console.error('❌ Brevo API not initialized');
+    return false;
+  }
+
   const subject = type === 'verification' ? 'Verify Your NTS Account' : 'Reset Your NTS Password';
   const html = `
     <!DOCTYPE html>
@@ -130,16 +140,15 @@ const sendOTPEmail = async (toEmail, otp, type = 'verification') => {
     </html>
   `;
 
-  const mailOptions = {
-    from: `"NTS Platform" <${process.env.EMAIL_USER}>`,
-    to: toEmail,
-    subject: subject,
-    html: html
-  };
+  const sendSmtpEmail = new brevo.SendSmtpEmail();
+  sendSmtpEmail.subject = subject;
+  sendSmtpEmail.to = [{ email: toEmail }];
+  sendSmtpEmail.htmlContent = html;
+  sendSmtpEmail.sender = { email: process.env.EMAIL_USER, name: 'NTS Platform' };
 
   try {
-    const info = await emailTransporter.sendMail(mailOptions);
-    console.log(`✅ OTP email sent to ${toEmail} - Message ID: ${info.messageId}`);
+    const data = await brevoApiInstance.sendTransacEmail(sendSmtpEmail);
+    console.log(`✅ OTP email sent to ${toEmail} - Message ID: ${data.messageId}`);
     return true;
   } catch (error) {
     console.error('❌ Email sending error:', error);
@@ -169,7 +178,7 @@ app.use(cors({
   origin: [
     "http://localhost:3000",
     "https://exquisite-souffle-c3acd0.netlify.app",
-    "https://nts-platform.netlify.app",  // ← YOUR NEW RENAMED URL
+    "https://nts-platform.netlify.app",
     "https://*.netlify.app"
   ], 
   credentials: true 
@@ -1416,6 +1425,7 @@ async function syncDatabase() {
 
 // Start server with database sync
 async function startServer() {
+  initBrevo(); // Initialize Brevo API
   const synced = await syncDatabase();
   
   if (synced) {
