@@ -169,6 +169,7 @@ app.use(cors({
   origin: [
     "http://localhost:3000",
     "https://exquisite-souffle-c3acd0.netlify.app",
+    "https://nts-platform.netlify.app",  // ← YOUR NEW RENAMED URL
     "https://*.netlify.app"
   ], 
   credentials: true 
