@@ -24,10 +24,20 @@ const prisma = new PrismaClient({
 
 const app = express();
 const server = http.createServer(app);
+
+// ============ SOCKET.IO WITH IMPROVED CORS ============
 const io = socketIO(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
-    credentials: true
+    origin: [
+      "http://localhost:3000",
+      "http://localhost:3001",
+      "https://exquisite-souffle-c3acd0.netlify.app",
+      "https://polite-cucurucho-d21021.netlify.app",
+      "https://nts-platform.netlify.app",
+      "https://*.netlify.app"
+    ],
+    credentials: true,
+    methods: ["GET", "POST"]
   }
 });
 
@@ -174,7 +184,9 @@ const upload = multer({
 app.use(cors({ 
   origin: [
     "http://localhost:3000",
+    "http://localhost:3001",
     "https://exquisite-souffle-c3acd0.netlify.app",
+    "https://polite-cucurucho-d21021.netlify.app",
     "https://nts-platform.netlify.app",
     "https://*.netlify.app"
   ], 
@@ -865,7 +877,7 @@ app.post('/api/chat/messages', authenticate, async (req, res) => {
   try {
     const message = await prisma.message.create({
       data: { 
-        content: content || (fileUrl ? `📎 ${fileName || 'File'}` : ''), 
+        content: content || '', 
         senderId: req.user.id, 
         receiverId, 
         chatId, 
@@ -882,8 +894,9 @@ app.post('/api/chat/messages', authenticate, async (req, res) => {
       }
     });
     
-    console.log(`New message created: ID ${message.id}, isRead: ${message.isRead}`);
+    console.log(`New message created: ID ${message.id}`);
     
+    // Emit to receiver
     io.to(`user:${receiverId}`).emit('message:received', message);
     
     res.status(201).json(message);
@@ -921,10 +934,8 @@ app.put('/api/chat/messages/:messageId', authenticate, async (req, res) => {
       }
     });
     
-    const receiverSocketId = onlineUsers.get(message.receiverId);
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit('message:edited', updatedMessage);
-    }
+    // Emit to receiver
+    io.to(`user:${message.receiverId}`).emit('message:updated', updatedMessage);
     
     res.json(updatedMessage);
   } catch (error) {
@@ -947,10 +958,8 @@ app.delete('/api/chat/messages/:messageId', authenticate, async (req, res) => {
       data: { isDeleted: true, deletedBy: req.user.id }
     });
     
-    const receiverSocketId = onlineUsers.get(message.receiverId);
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit('message:deleted', { messageId });
-    }
+    // Emit to receiver
+    io.to(`user:${message.receiverId}`).emit('message:deleted', { messageId });
     
     res.json({ success: true });
   } catch (error) {
@@ -958,14 +967,44 @@ app.delete('/api/chat/messages/:messageId', authenticate, async (req, res) => {
   }
 });
 
-app.post('/api/chat/messages/:messageId/read', authenticate, async (req, res) => {
+// NEW: Mark message as delivered
+app.post('/api/chat/messages/:messageId/delivered', authenticate, async (req, res) => {
   const { messageId } = req.params;
   
   try {
+    const message = await prisma.message.findUnique({ where: { id: messageId } });
+    if (!message) return res.status(404).json({ error: 'Message not found' });
+    
+    await prisma.message.update({
+      where: { id: messageId },
+      data: { deliveredAt: new Date() }
+    });
+    
+    // Notify sender that message was delivered
+    io.to(`user:${message.senderId}`).emit('message:delivered', { messageId });
+    
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// NEW: Mark message as seen/read
+app.post('/api/chat/messages/:messageId/seen', authenticate, async (req, res) => {
+  const { messageId } = req.params;
+  
+  try {
+    const message = await prisma.message.findUnique({ where: { id: messageId } });
+    if (!message) return res.status(404).json({ error: 'Message not found' });
+    
     await prisma.message.update({
       where: { id: messageId },
       data: { isRead: true, readAt: new Date() }
     });
+    
+    // Notify sender that message was seen
+    io.to(`user:${message.senderId}`).emit('message:seen', { messageId });
+    
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -983,8 +1022,8 @@ app.get('/api/chat/search', authenticate, async (req, res) => {
       where: {
         id: { not: req.user.id },
         OR: [
-          { fullName: { contains: q } },
-          { email: { contains: q } }
+          { fullName: { contains: q, mode: 'insensitive' } },
+          { email: { contains: q, mode: 'insensitive' } }
         ]
       },
       select: {
@@ -1219,6 +1258,131 @@ app.get('/api/dashboard/stats', authenticate, async (req, res) => {
   }
 });
 
+// ============ COURSE/TRADE ROUTES ============
+app.get('/api/trades', authenticate, async (req, res) => {
+  try {
+    const trades = await prisma.trade.findMany({
+      include: {
+        modules: true
+      }
+    });
+    res.json(trades);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/trades', authenticate, async (req, res) => {
+  if (req.user.role !== 'ADMIN') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  
+  const { name, description, icon, color } = req.body;
+  try {
+    const trade = await prisma.trade.create({
+      data: { name, description, icon, color }
+    });
+    res.status(201).json(trade);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/modules', authenticate, async (req, res) => {
+  if (req.user.role !== 'ADMIN') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  
+  const { tradeId, level, code, name, description } = req.body;
+  try {
+    const module = await prisma.module.create({
+      data: { tradeId: parseInt(tradeId), level: parseInt(level), code, name, description }
+    });
+    res.status(201).json(module);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/trades/:tradeId', authenticate, async (req, res) => {
+  if (req.user.role !== 'ADMIN') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  
+  const { tradeId } = req.params;
+  try {
+    await prisma.module.deleteMany({ where: { tradeId: parseInt(tradeId) } });
+    await prisma.trade.delete({ where: { id: parseInt(tradeId) } });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/modules/:moduleId', authenticate, async (req, res) => {
+  if (req.user.role !== 'ADMIN') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  
+  const { moduleId } = req.params;
+  try {
+    await prisma.module.delete({ where: { id: parseInt(moduleId) } });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ ADDITIONAL ROUTES ============
+
+// Get student's own applications
+app.get('/api/my-applications', authenticate, async (req, res) => {
+  try {
+    const applications = await prisma.internshipApplication.findMany({
+      where: { studentId: req.user.id },
+      include: { internship: true }
+    });
+    res.json(applications);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Withdraw application
+app.delete('/api/applications/:applicationId', authenticate, async (req, res) => {
+  const { applicationId } = req.params;
+  
+  try {
+    const application = await prisma.internshipApplication.findUnique({
+      where: { id: applicationId }
+    });
+    
+    if (!application) return res.status(404).json({ error: 'Application not found' });
+    if (application.studentId !== req.user.id && req.user.role !== 'ADMIN') {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    
+    await prisma.internshipApplication.delete({ where: { id: applicationId } });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get admin contact info for students
+app.get('/api/admin/contact', authenticate, async (req, res) => {
+  try {
+    const admin = await prisma.user.findFirst({
+      where: { role: 'ADMIN' },
+      select: { id: true, fullName: true, email: true }
+    });
+    if (!admin) return res.status(404).json({ error: 'No admin found' });
+    res.json(admin);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============ SOCKET.IO ============
 const onlineUsers = new Map();
 
@@ -1242,6 +1406,16 @@ io.on('connection', (socket) => {
   socket.join(`user:${socket.userId}`);
   io.emit('users:online', Array.from(onlineUsers.keys()));
 
+  socket.on('user:online', (data) => {
+    onlineUsers.set(data.userId, socket.id);
+    io.emit('users:online', Array.from(onlineUsers.keys()));
+  });
+
+  socket.on('user:offline', (data) => {
+    onlineUsers.delete(data.userId);
+    io.emit('users:online', Array.from(onlineUsers.keys()));
+  });
+
   socket.on('application:submitted', (data) => {
     console.log(`Application submitted for internship ${data.internshipId} by user ${socket.userId}`);
     io.emit('application:new', data);
@@ -1254,49 +1428,35 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('call:offer', (data) => {
-    console.log('📞 Call offer from', socket.userId, 'to', data.to);
-    io.to(`user:${data.to}`).emit('call:incoming', {
-      fromId: socket.userId,
-      fromName: data.fromName,
-      offer: data.offer
-    });
-  });
-
-  socket.on('call:accepted', (data) => {
-    console.log('✅ Call accepted from', socket.userId, 'to', data.to);
-    io.to(`user:${data.to}`).emit('call:accepted');
-  });
-
-  socket.on('call:reject', (data) => {
-    console.log('❌ Call rejected from', socket.userId, 'to', data.to);
-    io.to(`user:${data.to}`).emit('call:rejected');
-  });
-
-  socket.on('call:answer', (data) => {
-    console.log('📞 Call answer from', socket.userId, 'to', data.to);
-    io.to(`user:${data.to}`).emit('call:answer', { answer: data.answer });
-  });
-
-  socket.on('call:ice-candidate', (data) => {
-    console.log('🧊 ICE candidate from', socket.userId, 'to', data.to);
-    io.to(`user:${data.to}`).emit('call:ice-candidate', { candidate: data.candidate });
-  });
-
-  socket.on('message:edit', (data) => {
-    const receiverSocketId = onlineUsers.get(data.receiverId);
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit('message:edited', data.message);
+  socket.on('message:delivered', (data) => {
+    const senderSocketId = onlineUsers.get(data.to);
+    if (senderSocketId) {
+      io.to(senderSocketId).emit('message:delivered', { messageId: data.messageId });
     }
   });
-  
-  socket.on('message:delete', (data) => {
+
+  socket.on('message:seen', (data) => {
+    const senderSocketId = onlineUsers.get(data.to);
+    if (senderSocketId) {
+      io.to(senderSocketId).emit('message:seen', { messageId: data.messageId });
+    }
+  });
+
+  socket.on('message:updated', (data) => {
+    const receiverSocketId = onlineUsers.get(data.receiverId);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit('message:updated', data.message);
+    }
+  });
+
+  socket.on('message:deleted', (data) => {
     const receiverSocketId = onlineUsers.get(data.receiverId);
     if (receiverSocketId) {
       io.to(receiverSocketId).emit('message:deleted', { messageId: data.messageId });
     }
   });
-  
+
+  // Typing events
   socket.on('typing:start', ({ receiverId }) => {
     const receiverSocketId = onlineUsers.get(receiverId);
     if (receiverSocketId) {
@@ -1304,16 +1464,64 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('application:status:updated', (data) => {
-    console.log(`Application status updated to ${data.status} for student ${data.studentId}`);
-    io.to(`user:${data.studentId}`).emit('application:status:updated', data);
-  });
-  
   socket.on('typing:stop', ({ receiverId }) => {
     const receiverSocketId = onlineUsers.get(receiverId);
     if (receiverSocketId) {
       io.to(receiverSocketId).emit('typing:stop', { userId: socket.userId });
     }
+  });
+
+  // Video Call Events - COMPLETE WEBRTC SIGNALING
+  socket.on('call:start', (data) => {
+    console.log('📞 Call started from', socket.userId, 'to', data.to);
+    const receiverSocketId = onlineUsers.get(data.to);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit('call:incoming', {
+        fromId: socket.userId,
+        fromName: data.fromName,
+        isVideo: data.isVideo
+      });
+    }
+  });
+
+  socket.on('call:accept', (data) => {
+    console.log('✅ Call accepted from', socket.userId, 'to', data.to);
+    const callerSocketId = onlineUsers.get(data.to);
+    if (callerSocketId) {
+      io.to(callerSocketId).emit('call:accepted', { from: socket.userId });
+    }
+  });
+
+  socket.on('call:reject', (data) => {
+    console.log('❌ Call rejected from', socket.userId, 'to', data.to);
+    const callerSocketId = onlineUsers.get(data.to);
+    if (callerSocketId) {
+      io.to(callerSocketId).emit('call:rejected');
+    }
+  });
+
+  socket.on('call:end', (data) => {
+    console.log('📴 Call ended from', socket.userId, 'to', data.to);
+    const receiverSocketId = onlineUsers.get(data.to);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit('call:ended');
+    }
+  });
+
+  socket.on('call:webrtc:signal', (data) => {
+    console.log('🔄 WebRTC signal from', socket.userId, 'to', data.to);
+    const receiverSocketId = onlineUsers.get(data.to);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit('call:webrtc:signal', {
+        signal: data.signal,
+        from: socket.userId
+      });
+    }
+  });
+
+  socket.on('application:status:updated', (data) => {
+    console.log(`Application status updated to ${data.status} for student ${data.studentId}`);
+    io.to(`user:${data.studentId}`).emit('application:status:updated', data);
   });
   
   socket.on('disconnect', () => {
@@ -1349,55 +1557,28 @@ async function createDefaultAdmin() {
   }
 }
 
-// ============ ADDITIONAL ROUTES ============
-
-// Get student's own applications
-app.get('/api/my-applications', authenticate, async (req, res) => {
+// ============ CREATE DEFAULT TRADES AND MODULES ============
+async function createDefaultTrades() {
   try {
-    const applications = await prisma.internshipApplication.findMany({
-      where: { studentId: req.user.id },
-      include: { internship: true }
-    });
-    res.json(applications);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Withdraw application (SINGLE - NO DUPLICATE)
-app.delete('/api/applications/:applicationId', authenticate, async (req, res) => {
-  const { applicationId } = req.params;
-  
-  try {
-    const application = await prisma.internshipApplication.findUnique({
-      where: { id: applicationId }
-    });
-    
-    if (!application) return res.status(404).json({ error: 'Application not found' });
-    if (application.studentId !== req.user.id && req.user.role !== 'ADMIN') {
-      return res.status(403).json({ error: 'Not authorized' });
+    const existingTrades = await prisma.trade.count();
+    if (existingTrades === 0) {
+      const trades = [
+        { name: 'Software Development', description: 'Web and application development', icon: 'FaCode', color: 'bg-green-500' },
+        { name: 'Networking & Internet Technologies', description: 'Network infrastructure and security', icon: 'FaNetworkWired', color: 'bg-blue-500' },
+        { name: 'Computer Systems & Architecture', description: 'Hardware and system design', icon: 'FaMicrochip', color: 'bg-purple-500' },
+        { name: 'Electronics & Telecommunication', description: 'Electronic systems and communication', icon: 'FaBroadcastTower', color: 'bg-yellow-500' },
+        { name: 'Multimedia & Production', description: 'Video, audio, and graphic design', icon: 'FaVideo', color: 'bg-red-500' }
+      ];
+      
+      for (const trade of trades) {
+        await prisma.trade.create({ data: trade });
+      }
+      console.log('✅ Default trades created');
     }
-    
-    await prisma.internshipApplication.delete({ where: { id: applicationId } });
-    res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Failed to create default trades:', error.message);
   }
-});
-
-// Get admin contact info for students
-app.get('/api/admin/contact', authenticate, async (req, res) => {
-  try {
-    const admin = await prisma.user.findFirst({
-      where: { role: 'ADMIN' },
-      select: { id: true, fullName: true, email: true }
-    });
-    if (!admin) return res.status(404).json({ error: 'No admin found' });
-    res.json(admin);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+}
 
 // ============ START SERVER WITH DATABASE SYNC ============
 const PORT = process.env.PORT || 5000;
@@ -1407,12 +1588,6 @@ async function syncDatabase() {
   try {
     await prisma.$connect();
     console.log('✅ Database connected successfully');
-    
-    // Execute prisma db push to create/update tables
-    const { execSync } = require('child_process');
-    console.log('🔄 Syncing database schema...');
-    execSync('npx prisma db push --accept-data-loss', { stdio: 'inherit' });
-    console.log('✅ Database schema synced successfully');
     return true;
   } catch (error) {
     console.error('❌ Database sync error:', error.message);
@@ -1426,6 +1601,7 @@ async function startServer() {
   
   if (synced) {
     await createDefaultAdmin();
+    await createDefaultTrades();
   } else {
     console.log('⚠️ Database sync failed, but continuing...');
   }

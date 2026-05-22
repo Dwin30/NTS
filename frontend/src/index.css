@@ -35,3 +35,30 @@ code {
 ::-webkit-scrollbar-thumb:hover {
   background: #a8a8a8;
 }
+/* Mobile Responsive Fixes */
+@media (max-width: 768px) {
+  .messages-container {
+    flex-direction: column;
+  }
+  
+  .chat-sidebar {
+    width: 100%;
+    max-height: 40vh;
+  }
+  
+  .chat-area {
+    height: 60vh;
+  }
+  
+  .message-text {
+    font-size: 14px;
+  }
+  
+  .nav-buttons span {
+    display: none;
+  }
+  
+  .nav-buttons {
+    gap: 8px;
+  }
+}

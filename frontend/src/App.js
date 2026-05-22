@@ -1,4 +1,4 @@
- import React from 'react';
+import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import Navbar from './components/Navbar';
@@ -12,6 +12,7 @@ import Messages from './pages/Messages';
 import Internships from './pages/Internships';
 import Profile from './pages/Profile';
 import AdminPanel from './pages/AdminPanel';
+import Courses from './pages/Courses';
 
 function App() {
   const { isAuthenticated, user } = useAuthStore();
@@ -30,6 +31,7 @@ function App() {
             <Route path="/feed" element={isAuthenticated ? <Feed /> : <Navigate to="/login" />} />
             <Route path="/messages" element={isAuthenticated ? <Messages /> : <Navigate to="/login" />} />
             <Route path="/internships" element={isAuthenticated ? <Internships /> : <Navigate to="/login" />} />
+            <Route path="/courses" element={isAuthenticated ? <Courses /> : <Navigate to="/login" />} />
             <Route path="/profile/:userId?" element={isAuthenticated ? <Profile /> : <Navigate to="/login" />} />
             <Route path="/admin" element={isAuthenticated && user?.role === 'ADMIN' ? <AdminPanel /> : <Navigate to="/" />} />
           </Routes>

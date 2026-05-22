@@ -1,4 +1,4 @@
- import axios from 'axios';
+import axios from 'axios';
 
 // Use environment variable or default to localhost
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';

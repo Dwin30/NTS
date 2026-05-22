@@ -1,33 +1,52 @@
- import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import { FaCode, FaHome, FaNewspaper, FaComment, FaBriefcase, FaUser, FaSignOutAlt, FaCrown, FaBars, FaTimes } from 'react-icons/fa';
+import { io } from 'socket.io-client';
+import { FaCode, FaHome, FaNewspaper, FaComment, FaBriefcase, FaUser, FaSignOutAlt, FaCrown, FaBars, FaTimes, FaBook } from 'react-icons/fa';
+
+const SOCKET_URL = 'https://nts-backend-409a.onrender.com';
 
 const Navbar = () => {
-  const { user, logout, unreadCount, setUnreadCount } = useAuthStore();
+  const { user, logout, unreadCount, setUnreadCount, token } = useAuthStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   
   useEffect(() => {
-    const fetchUnreadCount = async () => {
-      if (!user) return;
-      try {
-        const api = (await import('../services/api')).default;
-        const res = await api.get('/chat');
-        const chats = res.data || [];
-        const totalUnread = chats.reduce((total, chat) => {
-          const unread = (chat.messages || []).filter(msg => 
-            msg.isRead === false && msg.senderId !== user?.id
-          ).length;
-          return total + unread;
-        }, 0);
-        setUnreadCount(totalUnread);
-      } catch (error) {
-        console.error('Failed to fetch unread count', error);
-      }
-    };
+    if (!user) return;
     
+    const newSocket = io(SOCKET_URL, { auth: { token } });
+    
+    newSocket.on('message:received', () => {
+      fetchUnreadCount();
+    });
+    
+    newSocket.on('message:read', () => {
+      fetchUnreadCount();
+    });
+    
+    return () => newSocket.disconnect();
+  }, [user, token]);
+  
+  const fetchUnreadCount = async () => {
+    if (!user) return;
+    try {
+      const api = (await import('../services/api')).default;
+      const res = await api.get('/chat');
+      const chats = res.data || [];
+      const totalUnread = chats.reduce((total, chat) => {
+        const unread = (chat.messages || []).filter(msg => 
+          msg.isRead === false && msg.senderId !== user?.id
+        ).length;
+        return total + unread;
+      }, 0);
+      setUnreadCount(totalUnread);
+    } catch (error) {
+      console.error('Failed to fetch unread count', error.message);
+    }
+  };
+  
+  useEffect(() => {
     fetchUnreadCount();
     const interval = setInterval(fetchUnreadCount, 30000);
     return () => clearInterval(interval);
@@ -69,6 +88,10 @@ const Navbar = () => {
             <Link to="/internships" className={isActive('/internships') ? 'text-nts-green-600' : 'text-gray-600 hover:text-nts-green-600'}>
               <FaBriefcase size={20} />
             </Link>
+            {/* Courses link for all users */}
+            <Link to="/courses" className={isActive('/courses') ? 'text-nts-green-600' : 'text-gray-600 hover:text-nts-green-600'}>
+              <FaBook size={20} />
+            </Link>
             <Link to="/profile" className={isActive('/profile') ? 'text-nts-green-600' : 'text-gray-600 hover:text-nts-green-600'}>
               <FaUser size={20} />
             </Link>
@@ -104,6 +127,9 @@ const Navbar = () => {
               </Link>
               <Link to="/internships" onClick={() => setIsMenuOpen(false)} className="flex items-center space-x-3 px-2 py-2 rounded-lg hover:bg-gray-50">
                 <FaBriefcase size={18} /><span>Internships</span>
+              </Link>
+              <Link to="/courses" onClick={() => setIsMenuOpen(false)} className="flex items-center space-x-3 px-2 py-2 rounded-lg hover:bg-gray-50">
+                <FaBook size={18} /><span>Courses</span>
               </Link>
               <Link to="/profile" onClick={() => setIsMenuOpen(false)} className="flex items-center space-x-3 px-2 py-2 rounded-lg hover:bg-gray-50">
                 <FaUser size={18} /><span>Profile</span>

@@ -1,15 +1,29 @@
- import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation, Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { io } from 'socket.io-client';
 import { 
-  FaPaperPlane, FaSearch, FaUserPlus, FaComment, FaCheck, FaCheckDouble, 
-  FaTrash, FaEdit, FaReply, FaTimes, FaFile, FaPaperclip, FaDownload,
+  FaPaperPlane, FaSearch, FaUserPlus, FaComment, FaCheck, 
+  FaTrash, FaEdit, FaReply, FaTimes, FaPaperclip,
   FaArrowLeft, FaVideo as FaVideoCall, FaMicrophone, FaMicrophoneSlash,
-  FaVideoSlash, FaPhoneSlash, FaArrowDown, FaChevronLeft
+  FaVideoSlash, FaPhoneSlash, FaArrowDown, FaPlay, FaPause,
+  FaPhone, FaPhoneAlt, FaEllipsisV, FaStop, FaCircle, FaCheckDouble
 } from 'react-icons/fa';
 import toast from 'react-hot-toast';
-import api, { uploadFile } from '../services/api';
+import api from '../services/api';
+
+const SOCKET_URL = 'https://nts-backend-409a.onrender.com';
+
+const configuration = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+  ],
+  iceCandidatePoolSize: 10,
+};
 
 const Messages = () => {
   const { user, token, setUnreadCount } = useAuthStore();
@@ -24,14 +38,10 @@ const Messages = () => {
   const [searchResults, setSearchResults] = useState([]);
   const [showSearch, setShowSearch] = useState(false);
   const [sending, setSending] = useState(false);
-  const [replyTo, setReplyTo] = useState(null);
+  const [replyingTo, setReplyingTo] = useState(null);
   const [editingMessage, setEditingMessage] = useState(null);
-  const [typing, setTyping] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [messageToDelete, setMessageToDelete] = useState(null);
   const [isCallActive, setIsCallActive] = useState(false);
   const [isCalling, setIsCalling] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
@@ -39,420 +49,460 @@ const Messages = () => {
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
   const [peerConnection, setPeerConnection] = useState(null);
-  const [observedMessages, setObservedMessages] = useState(new Set());
   const [incomingCall, setIncomingCall] = useState(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [showChatArea, setShowChatArea] = useState(false);
+  const [playingAudioId, setPlayingAudioId] = useState(null);
+  const [showMessageOptions, setShowMessageOptions] = useState(false);
+  const [selectedMessage, setSelectedMessage] = useState(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [callDuration, setCallDuration] = useState(0);
+  
   const videoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
-  const messageIdsSet = useRef(new Set());
   const typingTimeoutRef = useRef(null);
   const fileInputRef = useRef(null);
-  const observerRef = useRef(null);
   const callTimerRef = useRef(null);
-  const isUserScrollingRef = useRef(false);
-  const scrollTimeoutRef = useRef(null);
+  const audioRefs = useRef({});
+  const [isRecording, setIsRecording] = useState(false);
+  const [mediaRecorder, setMediaRecorder] = useState(null);
+  const [recordingStream, setRecordingStream] = useState(null);
+  
+  // Handle mobile back button
+  useEffect(() => {
+    const handlePopState = () => {
+      if (isMobile && showChatArea) {
+        goBackToChatList();
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [isMobile, showChatArea]);
   
   useEffect(() => {
-    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+      if (window.innerWidth >= 768) setShowChatArea(false);
+    };
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
   
-  const getInitials = (name) => {
-    if (!name) return '?';
-    return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
-  };
+  // Socket connection
+  useEffect(() => {
+    if (!token || !user) return;
+    
+    const newSocket = io(SOCKET_URL, { 
+      auth: { token },
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+    });
+    
+    newSocket.on('connect', () => {
+      console.log('Socket connected');
+      newSocket.emit('user:online', { userId: user.id });
+    });
+    
+    newSocket.on('connect_error', (error) => {
+      console.error('Socket error:', error);
+    });
+    
+    setSocket(newSocket);
+    fetchChats();
+    
+    if (location.state?.selectedChat) {
+      setSelectedChat(location.state.selectedChat);
+      fetchMessages(location.state.selectedChat.id);
+      if (isMobile) setShowChatArea(true);
+    }
+    
+    return () => {
+      if (newSocket) {
+        newSocket.emit('user:offline', { userId: user.id });
+        newSocket.disconnect();
+      }
+    };
+  }, [token, user]);
+  
+  // Socket event listeners
+  useEffect(() => {
+    if (!socket) return;
+    
+    const handleNewMessage = (message) => {
+      console.log('New message received:', message);
+      if (selectedChat?.id === message.chatId) {
+        setMessages(prev => {
+          if (prev.some(m => m.id === message.id)) return prev;
+          return [...prev, { ...message, status: 'delivered' }];
+        });
+        setTimeout(() => scrollToBottom(), 100);
+      }
+      fetchChats();
+    };
+    
+    const handleMessageDelivered = ({ messageId }) => {
+      setMessages(prev => prev.map(msg => 
+        msg.id === messageId ? { ...msg, status: 'delivered' } : msg
+      ));
+    };
+    
+    const handleMessageSeen = ({ messageId }) => {
+      setMessages(prev => prev.map(msg => 
+        msg.id === messageId ? { ...msg, status: 'seen' } : msg
+      ));
+    };
+    
+    const handleTypingStart = ({ userId }) => {
+      const otherUser = getOtherParticipant();
+      if (otherUser && otherUser.id === userId) {
+        setIsTyping(true);
+      }
+    };
+    
+    const handleTypingStop = ({ userId }) => {
+      const otherUser = getOtherParticipant();
+      if (otherUser && otherUser.id === userId) {
+        setIsTyping(false);
+      }
+    };
+    
+    socket.on('message:received', handleNewMessage);
+    socket.on('message:delivered', handleMessageDelivered);
+    socket.on('message:seen', handleMessageSeen);
+    socket.on('typing:start', handleTypingStart);
+    socket.on('typing:stop', handleTypingStop);
+    
+    // Call events
+    socket.on('call:incoming', (data) => {
+      setIncomingCall(data);
+      if (window.currentRingtone) {
+        window.currentRingtone.pause();
+        window.currentRingtone = null;
+      }
+      const audio = new Audio('/ringtone.mp3');
+      audio.loop = true;
+      audio.play().catch(e => console.log('Ringtone play failed:', e));
+      window.currentRingtone = audio;
+      toast.success(`${data.fromName} is calling...`);
+    });
+    
+    socket.on('call:accepted', async ({ signal }) => {
+      if (peerConnection && signal) {
+        try {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
+          setIsCallActive(true);
+          setIsCalling(false);
+          toast.success('Call connected');
+          let seconds = 0;
+          callTimerRef.current = setInterval(() => {
+            seconds++;
+            setCallDuration(seconds);
+          }, 1000);
+        } catch (error) {
+          console.error('Error setting remote description:', error);
+        }
+      }
+    });
+    
+    socket.on('call:rejected', () => {
+      endCall();
+      toast.error('Call rejected');
+    });
+    
+    socket.on('call:ended', () => {
+      endCall();
+      toast.info('Call ended');
+    });
+    
+    socket.on('call:webrtc:signal', async ({ signal, from }) => {
+      if (peerConnection) {
+        try {
+          if (signal.type === 'offer') {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.emit('call:webrtc:signal', { signal: answer, to: from });
+          } else if (signal.type === 'answer') {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
+          } else if (signal.candidate) {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(signal));
+          }
+        } catch (error) {
+          console.error('WebRTC error:', error);
+        }
+      }
+    });
+    
+    return () => {
+      socket.off('message:received', handleNewMessage);
+      socket.off('message:delivered', handleMessageDelivered);
+      socket.off('message:seen', handleMessageSeen);
+      socket.off('typing:start', handleTypingStart);
+      socket.off('typing:stop', handleTypingStop);
+      socket.off('call:incoming');
+      socket.off('call:accepted');
+      socket.off('call:rejected');
+      socket.off('call:ended');
+      socket.off('call:webrtc:signal');
+    };
+  }, [socket, selectedChat]);
   
   const getOtherParticipant = useCallback(() => {
     if (!selectedChat || selectedChat.isGroup) return null;
-    return selectedChat.participants?.find(p => p.userId !== user.id)?.user;
+    const participant = selectedChat.participants?.find(p => p.userId !== user.id);
+    return participant?.user || participant;
   }, [selectedChat, user.id]);
   
-  const getChatUnreadCount = useCallback((chat) => {
-    if (!chat.messages || !Array.isArray(chat.messages)) return 0;
-    return chat.messages.filter(msg => msg.isRead === false && msg.senderId !== user?.id).length;
-  }, [user]);
-  
-  const calculateTotalUnread = useCallback((chatsData) => {
-    let total = 0;
-    chatsData.forEach(chat => { total += getChatUnreadCount(chat); });
-    return total;
-  }, [getChatUnreadCount]);
-  
-  const fetchChats = useCallback(async () => {
+  const fetchChats = async () => {
     try {
       const res = await api.get('/chat');
-      const chatsData = res.data || [];
-      setChats(chatsData);
-      const totalUnread = calculateTotalUnread(chatsData);
+      const chatData = res.data || [];
+      const validChats = chatData.filter(chat => {
+        if (chat.isGroup) return true;
+        const otherUser = chat.participants?.find(p => p.userId !== user.id)?.user;
+        return otherUser && otherUser.fullName && otherUser.fullName !== 'Unknown';
+      });
+      setChats(validChats);
+      const totalUnread = validChats.reduce((total, chat) => {
+        return total + (chat.messages || []).filter(msg => !msg.isRead && msg.senderId !== user?.id).length;
+      }, 0);
       setUnreadCount(totalUnread);
     } catch (error) {
       console.error('Failed to fetch chats', error);
     }
-  }, [calculateTotalUnread, setUnreadCount]);
+  };
   
-  const fetchMessages = useCallback(async (chatId) => {
+  const fetchMessages = async (chatId) => {
     try {
       const res = await api.get(`/chat/${chatId}/messages`);
-      const newMessages = (res.data.messages || []).filter(msg => !msg.isDeleted);
-      messageIdsSet.current.clear();
-      newMessages.forEach(m => messageIdsSet.current.add(m.id));
-      setMessages(newMessages);
-      setObservedMessages(new Set());
+      const msgs = (res.data.messages || []).map(msg => ({
+        ...msg,
+        status: msg.seen ? 'seen' : msg.delivered ? 'delivered' : 'sent'
+      }));
+      setMessages(msgs);
+      
+      // Mark as seen
+      const unseenMessages = msgs.filter(msg => !msg.seen && msg.senderId !== user.id);
+      unseenMessages.forEach(msg => {
+        socket?.emit('message:seen', { messageId: msg.id, to: msg.senderId });
+      });
+      
       setTimeout(() => scrollToBottom(), 100);
     } catch (error) {
       console.error('Failed to fetch messages', error);
     }
-  }, []);
+  };
   
-  const scrollToBottom = useCallback(() => {
-    if (messagesEndRef.current && !isUserScrollingRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, []);
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
   
-  const handleScroll = useCallback(() => {
+  const handleScroll = () => {
     if (messagesContainerRef.current) {
       const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
-      const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
-      setShowScrollButton(!isNearBottom);
-      isUserScrollingRef.current = true;
-      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-      scrollTimeoutRef.current = setTimeout(() => { isUserScrollingRef.current = false; }, 150);
+      setShowScrollButton(scrollHeight - scrollTop - clientHeight > 100);
     }
-  }, []);
-  
-  const goBackToChatList = () => setSelectedChat(null);
-  
-  const markAsRead = useCallback(async (messageId) => {
-    try {
-      const message = messages.find(m => m.id === messageId);
-      if (message && !message.isRead && message.senderId !== user.id) {
-        await api.post(`/chat/messages/${messageId}/read`);
-        setMessages(prev => prev.map(m => m.id === messageId ? { ...m, isRead: true } : m));
-        fetchChats();
-      }
-    } catch (error) {
-      console.error('Failed to mark as read', error);
-    }
-  }, [messages, user, fetchChats]);
-  
-  const endCall = useCallback(() => {
-    if (callTimerRef.current) clearTimeout(callTimerRef.current);
-    if (localStream) localStream.getTracks().forEach(track => track.stop());
-    if (peerConnection) peerConnection.close();
-    setLocalStream(null);
-    setRemoteStream(null);
-    setPeerConnection(null);
-    setIsCallActive(false);
-    setIsCalling(false);
-    setIsMuted(false);
-    setIsVideoOff(false);
-    setIncomingCall(null);
-    toast.success('Call ended');
-  }, [localStream, peerConnection]);
-  
-  const rejectCall = useCallback(() => {
-    if (incomingCall && socket) {
-      socket.emit('call:reject', { to: incomingCall.fromId });
-      setIncomingCall(null);
-      toast.error('Call rejected');
-      if (callTimerRef.current) clearTimeout(callTimerRef.current);
-    }
-  }, [incomingCall, socket]);
-  
-  const startCallSetup = useCallback(async (isVideo = true) => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: isVideo, audio: true });
-      setLocalStream(stream);
-      if (videoRef.current) videoRef.current.srcObject = stream;
-      
-      const pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }]
-      });
-      
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
-      pc.onicecandidate = (event) => {
-        if (event.candidate && socket) {
-          socket.emit('call:ice-candidate', { to: getOtherParticipant()?.id, candidate: event.candidate });
-        }
-      };
-      pc.ontrack = (event) => {
-        setRemoteStream(event.streams[0]);
-        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = event.streams[0];
-      };
-      setPeerConnection(pc);
-      return pc;
-    } catch (error) {
-      console.error('Error accessing media devices:', error);
-      toast.error('Cannot access camera/microphone. Please check permissions.');
-      return null;
-    }
-  }, [socket, getOtherParticipant]);
-  
-  const acceptCall = useCallback(async () => {
-    if (!incomingCall) return;
-    setIsCallActive(true);
-    setIsCalling(false);
-    const pc = await startCallSetup(true);
-    if (!pc) { setIsCallActive(false); return; }
-    try {
-      if (socket) {
-        socket.emit('call:accepted', { to: incomingCall.fromId });
-        await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.offer));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.emit('call:answer', { to: incomingCall.fromId, answer });
-        toast.success('Call connected');
-        setIncomingCall(null);
-        if (callTimerRef.current) clearTimeout(callTimerRef.current);
-      }
-    } catch (error) {
-      console.error('Accept call error:', error);
-      toast.error('Failed to accept call');
-      endCall();
-    }
-  }, [incomingCall, socket, startCallSetup, endCall]);
-  
-  useEffect(() => {
-    const newSocket = io(process.env.REACT_APP_API_URL?.replace('/api', '') || 'http://localhost:5000', { auth: { token } });
-    setSocket(newSocket);
-    fetchChats();
-    if (location.state?.selectedChat) {
-      setSelectedChat(location.state.selectedChat);
-      fetchMessages(location.state.selectedChat.id);
-    }
-    return () => newSocket.disconnect();
-  }, [token, fetchChats, fetchMessages, location.state]);
-  
-  useEffect(() => { scrollToBottom(); }, [messages, scrollToBottom]);
-  
-  useEffect(() => {
-    if (!socket) return;
-    
-    socket.on('message:received', (message) => {
-      if (message.isDeleted) return;
-      if (messageIdsSet.current.has(message.id)) return;
-      messageIdsSet.current.add(message.id);
-      if (selectedChat?.id === message.chatId) {
-        setMessages(prev => { if (prev.some(m => m.id === message.id)) return prev; return [...prev, message]; });
-        setTimeout(() => scrollToBottom(), 100);
-      }
-      fetchChats();
-      if (message.senderId !== user.id) toast.success(`📩 New message from ${message.sender?.fullName}`);
-    });
-    
-    socket.on('message:sent', (message) => {
-      if (message.isDeleted) return;
-      if (messageIdsSet.current.has(message.id)) return;
-      messageIdsSet.current.add(message.id);
-      if (selectedChat?.id === message.chatId) {
-        setMessages(prev => { if (prev.some(m => m.id === message.id)) return prev; return [...prev, message]; });
-        scrollToBottom();
-      }
-      fetchChats();
-    });
-    
-    socket.on('message:edited', (message) => {
-      if (selectedChat?.id === message.chatId && !message.isDeleted) {
-        setMessages(prev => prev.map(m => m.id === message.id ? message : m));
-      }
-      fetchChats();
-    });
-    
-    socket.on('message:deleted', ({ messageId }) => {
-      setMessages(prev => prev.filter(m => m.id !== messageId));
-      fetchChats();
-    });
-    
-    socket.on('typing:start', ({ userId: typingUserId }) => {
-      if (selectedChat && getOtherParticipant()?.id === typingUserId) setIsTyping(true);
-    });
-    
-    socket.on('typing:stop', ({ userId: typingUserId }) => {
-      if (selectedChat && getOtherParticipant()?.id === typingUserId) setIsTyping(false);
-    });
-    
-    socket.on('call:incoming', (data) => {
-      console.log('📞 Incoming call from:', data.fromName);
-      setIncomingCall({ fromId: data.fromId, fromName: data.fromName, offer: data.offer });
-      
-      toast.custom((t) => (
-        <div className="max-w-md w-full bg-white shadow-lg rounded-lg pointer-events-auto flex ring-1 ring-black ring-opacity-5">
-          <div className="flex-1 w-0 p-4">
-            <div className="flex items-start">
-              <div className="flex-shrink-0 pt-0.5"><div className="w-10 h-10 rounded-full bg-nts-green-600 flex items-center justify-center"><FaVideoCall className="text-white" size={18} /></div></div>
-              <div className="ml-3 flex-1"><p className="text-sm font-medium text-gray-900">Incoming Call</p><p className="text-sm text-gray-500">{data.fromName} is calling you...</p></div>
-            </div>
-          </div>
-          <div className="flex border-l border-gray-200">
-            <button onClick={() => { toast.dismiss(t.id); acceptCall(); }} className="w-full border border-transparent rounded-none rounded-r-lg p-4 flex items-center justify-center text-sm font-medium text-green-600 hover:text-green-500 hover:bg-gray-50">Accept</button>
-            <button onClick={() => { toast.dismiss(t.id); rejectCall(); }} className="w-full border border-transparent rounded-none p-4 flex items-center justify-center text-sm font-medium text-red-600 hover:text-red-500 hover:bg-gray-50">Decline</button>
-          </div>
-        </div>
-      ), { duration: 30000 });
-      
-      if (callTimerRef.current) clearTimeout(callTimerRef.current);
-      callTimerRef.current = setTimeout(() => { if (incomingCall) { rejectCall(); toast.error('Call timed out - no answer'); } }, 15000);
-    });
-    
-    socket.on('call:accepted', () => { toast.success('Call connected'); setIsCalling(false); if (callTimerRef.current) clearTimeout(callTimerRef.current); });
-    socket.on('call:rejected', () => { toast.error('Call rejected'); endCall(); setIsCalling(false); setIncomingCall(null); if (callTimerRef.current) clearTimeout(callTimerRef.current); });
-    socket.on('call:offer', async (data) => { if (peerConnection) { await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer)); const answer = await peerConnection.createAnswer(); await peerConnection.setLocalDescription(answer); socket.emit('call:answer', { to: data.from, answer }); } });
-    socket.on('call:answer', async (data) => { if (peerConnection) await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer)); });
-    socket.on('call:ice-candidate', (data) => { if (peerConnection) peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)); });
-    
-    return () => {
-      socket.off('message:received'); socket.off('message:sent'); socket.off('message:edited'); socket.off('message:deleted');
-      socket.off('typing:start'); socket.off('typing:stop'); socket.off('call:incoming'); socket.off('call:accepted');
-      socket.off('call:rejected'); socket.off('call:offer'); socket.off('call:answer'); socket.off('call:ice-candidate');
-      if (callTimerRef.current) clearTimeout(callTimerRef.current);
-    };
-  }, [socket, selectedChat, fetchChats, user.id, getOtherParticipant, endCall, acceptCall, rejectCall, incomingCall, peerConnection, scrollToBottom]);
-  
-  useEffect(() => { if (selectedChat) fetchMessages(selectedChat.id); }, [selectedChat, fetchMessages]);
-  
-  useEffect(() => {
-    if (!messages.length) return;
-    if (observerRef.current) observerRef.current.disconnect();
-    observerRef.current = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          const messageId = entry.target.getAttribute('data-message-id');
-          if (messageId && !observedMessages.has(messageId)) {
-            const message = messages.find(m => m.id === messageId);
-            if (message && !message.isRead && message.senderId !== user.id) {
-              markAsRead(messageId);
-              setObservedMessages(prev => new Set([...prev, messageId]));
-            }
-          }
-        }
-      });
-    }, { threshold: 0.5 });
-    const messageElements = document.querySelectorAll('.message-item');
-    messageElements.forEach(el => observerRef.current.observe(el));
-    return () => { if (observerRef.current) observerRef.current.disconnect(); };
-  }, [messages, observedMessages, user, markAsRead]);
-  
-  const initiateCall = async (isVideo = true) => {
-    const otherUser = getOtherParticipant();
-    if (!otherUser) { toast.error('User not found'); return; }
-    try { await navigator.mediaDevices.getUserMedia({ video: isVideo, audio: true }); } catch (err) { toast.error('Please grant camera and microphone permissions'); return; }
-    if (isCalling) { toast.error('Already calling...'); return; }
-    setIsCalling(true);
-    setIsCallActive(true);
-    const pc = await startCallSetup(isVideo);
-    if (!pc) { setIsCalling(false); setIsCallActive(false); return; }
-    try {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      if (socket) socket.emit('call:offer', { to: otherUser.id, from: user.id, fromName: user.fullName, offer });
-      toast.success(`Calling ${otherUser.fullName}...`);
-      callTimerRef.current = setTimeout(() => { if (isCalling) { toast.error('No answer. Call timed out.'); endCall(); setIsCalling(false); } }, 15000);
-    } catch (error) { console.error('Call initiation error:', error); toast.error('Failed to start call'); endCall(); setIsCalling(false); }
-  };
-  
-  const toggleMute = () => {
-    if (localStream) { const audioTrack = localStream.getAudioTracks()[0]; if (audioTrack) { audioTrack.enabled = !audioTrack.enabled; setIsMuted(!audioTrack.enabled); toast.success(audioTrack.enabled ? 'Microphone on' : 'Microphone off'); } }
-  };
-  
-  const toggleVideo = () => {
-    if (localStream) { const videoTrack = localStream.getVideoTracks()[0]; if (videoTrack) { videoTrack.enabled = !videoTrack.enabled; setIsVideoOff(!videoTrack.enabled); toast.success(videoTrack.enabled ? 'Camera on' : 'Camera off'); } }
   };
   
   const handleTyping = (e) => {
     setInput(e.target.value);
-    if (!typing && e.target.value.length > 0) {
-      setTyping(true);
-      const otherUser = getOtherParticipant();
-      if (socket && otherUser) socket.emit('typing:start', { receiverId: otherUser.id });
-    }
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    typingTimeoutRef.current = setTimeout(() => {
-      if (typing) {
-        setTyping(false);
-        const otherUser = getOtherParticipant();
-        if (socket && otherUser) socket.emit('typing:stop', { receiverId: otherUser.id });
-      }
-    }, 1500);
-  };
-  
-  const handleFileUpload = async (file) => {
-    if (!file) return;
-    setUploading(true);
-    setUploadProgress(0);
-    try {
-      const result = await uploadFile(file, (progress) => setUploadProgress(progress));
-      await sendMessageWithFile(result);
-    } catch (error) { toast.error('Failed to upload file'); }
-    finally { setUploading(false); setUploadProgress(0); }
-  };
-  
-  const sendMessageWithFile = async (fileData) => {
     const otherUser = getOtherParticipant();
-    if (!selectedChat || sending) return;
-    setSending(true);
-    try {
-      const res = await api.post('/chat/messages', { chatId: selectedChat.id, content: '', receiverId: otherUser?.id, fileUrl: fileData.url, fileType: fileData.mimetype, fileName: fileData.originalName, replyToId: replyTo?.id });
-      const newMessage = res.data;
-      if (!messageIdsSet.current.has(newMessage.id)) {
-        messageIdsSet.current.add(newMessage.id);
-        setMessages(prev => [...prev, newMessage]);
-      }
-      setReplyTo(null);
-      if (socket && otherUser) socket.emit('message:send', { receiverId: otherUser.id, message: newMessage });
-      fetchChats();
-      toast.success('Message sent');
-      scrollToBottom();
-    } catch (error) { console.error('Send message error:', error); toast.error('Failed to send message'); }
-    finally { setSending(false); }
+    if (socket && otherUser) {
+      socket.emit('typing:start', { receiverId: otherUser.id });
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(() => {
+        socket.emit('typing:stop', { receiverId: otherUser.id });
+      }, 1500);
+    }
   };
   
   const sendMessage = async () => {
-    if ((!input.trim() && !replyTo) || !selectedChat || sending) return;
+    if (!input.trim() || !selectedChat || sending) return;
     const otherUser = getOtherParticipant();
     setSending(true);
     try {
-      const res = await api.post('/chat/messages', { chatId: selectedChat.id, content: input, receiverId: otherUser?.id, replyToId: replyTo?.id });
-      const newMessage = res.data;
-      if (!messageIdsSet.current.has(newMessage.id)) {
-        messageIdsSet.current.add(newMessage.id);
-        setMessages(prev => [...prev, newMessage]);
-      }
+      const payload = { 
+        chatId: selectedChat.id, 
+        content: input, 
+        receiverId: otherUser?.id 
+      };
+      if (replyingTo) payload.replyToId = replyingTo.id;
+      
+      const res = await api.post('/chat/messages', payload);
+      const newMessage = { ...res.data, status: 'sent' };
+      setMessages(prev => [...prev, newMessage]);
       setInput('');
-      setReplyTo(null);
-      if (socket && otherUser) socket.emit('message:send', { receiverId: otherUser.id, message: newMessage });
+      setReplyingTo(null);
+      
+      if (socket && otherUser) {
+        socket.emit('message:send', { receiverId: otherUser.id, message: newMessage });
+        // Simulate delivery
+        setTimeout(() => {
+          setMessages(prev => prev.map(msg => 
+            msg.id === newMessage.id ? { ...msg, status: 'delivered' } : msg
+          ));
+        }, 500);
+      }
       fetchChats();
       scrollToBottom();
-    } catch (error) { console.error('Send message error:', error); toast.error('Failed to send message'); }
-    finally { setSending(false); }
+    } catch (error) {
+      console.error('Send error:', error);
+      toast.error('Failed to send message');
+    } finally {
+      setSending(false);
+    }
   };
   
-  const confirmDeleteMessage = (message) => { setMessageToDelete(message); setShowDeleteModal(true); };
-  
-  const handleDeleteMessage = async () => {
-    if (!messageToDelete) return;
+  const editMessage = async () => {
+    if (!editingMessage || !input.trim()) return;
     try {
-      await api.delete(`/chat/messages/${messageToDelete.id}`);
-      setMessages(prev => prev.filter(m => m.id !== messageToDelete.id));
-      const otherUser = getOtherParticipant();
-      if (socket && otherUser) socket.emit('message:delete', { receiverId: otherUser.id, messageId: messageToDelete.id });
-      fetchChats();
-      toast.success('Message deleted');
-      setShowDeleteModal(false);
-      setMessageToDelete(null);
-    } catch (error) { toast.error('Failed to delete message'); }
+      const res = await api.put(`/chat/messages/${editingMessage.id}`, { content: input });
+      const updatedMessage = res.data;
+      setMessages(prev => prev.map(msg => msg.id === editingMessage.id ? updatedMessage : msg));
+      setInput('');
+      setEditingMessage(null);
+      toast.success('Message edited');
+    } catch (error) {
+      console.error('Edit error:', error);
+      toast.error('Failed to edit message');
+    }
   };
   
-  const handleKeyPress = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } };
+  const deleteMessage = async () => {
+    if (!selectedMessage) return;
+    try {
+      await api.delete(`/chat/messages/${selectedMessage.id}`);
+      setMessages(prev => prev.filter(msg => msg.id !== selectedMessage.id));
+      setShowDeleteConfirm(false);
+      setShowMessageOptions(false);
+      setSelectedMessage(null);
+      toast.success('Message deleted');
+    } catch (error) {
+      console.error('Delete error:', error);
+      toast.error('Failed to delete message');
+    }
+  };
+  
+  const handleReplyClick = (message) => {
+    setReplyingTo(message);
+    setShowMessageOptions(false);
+    document.querySelector('textarea')?.focus();
+  };
+  
+  const handleEditClick = (message) => {
+    setEditingMessage(message);
+    setInput(message.content);
+    setShowMessageOptions(false);
+    document.querySelector('textarea')?.focus();
+  };
+  
+  const uploadFileToServer = async (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await api.post('/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return response.data;
+  };
+  
+  const startVoiceRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setRecordingStream(stream);
+      const recorder = new MediaRecorder(stream);
+      const chunks = [];
+      
+      recorder.ondataavailable = (event) => {
+        chunks.push(event.data);
+      };
+      
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(chunks, { type: 'audio/webm' });
+        const file = new File([audioBlob], `voice-${Date.now()}.webm`, { type: 'audio/webm' });
+        await handleFileUpload(file);
+        stream.getTracks().forEach(track => track.stop());
+        setRecordingStream(null);
+      };
+      
+      recorder.start(100);
+      setMediaRecorder(recorder);
+      setIsRecording(true);
+      
+      setTimeout(() => {
+        if (recorder.state === 'recording') {
+          recorder.stop();
+          setIsRecording(false);
+        }
+      }, 30000);
+    } catch (error) {
+      console.error('Microphone error:', error);
+      toast.error('Please allow microphone access');
+    }
+  };
+  
+  const stopVoiceRecording = () => {
+    if (mediaRecorder && isRecording) {
+      mediaRecorder.stop();
+      setIsRecording(false);
+    }
+  };
+  
+  const handleFileUpload = async (file) => {
+    if (!selectedChat) {
+      toast.error('No chat selected');
+      return;
+    }
+    setUploading(true);
+    try {
+      const result = await uploadFileToServer(file);
+      const otherUser = getOtherParticipant();
+      const res = await api.post('/chat/messages', { 
+        chatId: selectedChat.id, 
+        content: '', 
+        receiverId: otherUser?.id,
+        fileUrl: result.url,
+        fileType: file.type,
+        fileName: file.name
+      });
+      setMessages(prev => [...prev, { ...res.data, status: 'sent' }]);
+      if (socket && otherUser) {
+        socket.emit('message:send', { receiverId: otherUser.id, message: res.data });
+      }
+      scrollToBottom();
+      toast.success('Sent');
+    } catch (error) {
+      console.error('Upload error:', error);
+      toast.error('Failed to upload');
+    } finally {
+      setUploading(false);
+    }
+  };
+  
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      editingMessage ? editMessage() : sendMessage();
+    }
+  };
   
   const searchUsers = async (query) => {
-    if (query.length < 2) { setSearchResults([]); return; }
-    try { const res = await api.get('/chat/search', { params: { q: query } }); setSearchResults(res.data || []); } catch (error) { console.error('Search failed'); }
+    if (query.length < 2) {
+      setSearchResults([]);
+      return;
+    }
+    try {
+      const res = await api.get('/chat/search', { params: { q: query } });
+      const filteredResults = (res.data || []).filter(user => user.fullName && user.fullName !== 'Unknown');
+      setSearchResults(filteredResults);
+    } catch (error) {
+      console.error('Search failed', error);
+    }
   };
   
   const startChat = async (userId) => {
@@ -464,119 +514,693 @@ const Messages = () => {
       fetchChats();
       await fetchMessages(res.data.id);
       toast.success('Chat started');
-    } catch (error) { console.error('Start chat error:', error); toast.error('Failed to start chat'); }
+      if (isMobile) setShowChatArea(true);
+    } catch (error) {
+      console.error('Start chat error:', error);
+      toast.error('Failed to start chat');
+    }
   };
   
-  const renderFilePreview = (message) => {
-    const fileType = message.fileType;
-    const fileName = message.fileName || 'File';
-    if (fileType?.startsWith('image/')) return (<div className="mt-2"><img src={message.fileUrl} alt={fileName} className="max-w-full rounded-lg cursor-pointer max-h-48 object-cover" onClick={() => window.open(message.fileUrl, '_blank')} /></div>);
-    if (fileType?.startsWith('video/')) return (<div className="mt-2"><video src={message.fileUrl} controls className="max-w-full rounded-lg max-h-48" controlsList="nodownload" /></div>);
-    if (fileType?.startsWith('audio/')) return (<div className="mt-2 p-2 bg-gray-100 rounded-lg"><audio src={message.fileUrl} controls className="w-full" /><p className="text-xs text-gray-500 mt-1 truncate">{fileName}</p></div>);
-    return (<div className="mt-2 p-2 bg-gray-100 rounded-lg flex items-center justify-between hover:bg-gray-200 transition"><div className="flex items-center space-x-2 flex-1 min-w-0"><FaFile className="text-nts-green-600 flex-shrink-0" size={16} /><span className="text-xs text-gray-700 truncate flex-1">{fileName}</span></div><a href={message.fileUrl} download className="text-nts-green-600 p-1 rounded-full hover:bg-white transition"><FaDownload size={12} /></a></div>);
+  const selectChat = (chat) => {
+    setSelectedChat(chat);
+    fetchMessages(chat.id);
+    if (isMobile) setShowChatArea(true);
+  };
+  
+  const goBackToChatList = () => {
+    setShowChatArea(false);
+    setSelectedChat(null);
+    setReplyingTo(null);
+    setEditingMessage(null);
+  };
+  
+  // Video Call
+  const initiateCall = async (isVideo = true) => {
+    const otherUser = getOtherParticipant();
+    if (!otherUser) {
+      toast.error('User not found');
+      return;
+    }
+    
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: isVideo, audio: true });
+      setLocalStream(stream);
+      if (videoRef.current) videoRef.current.srcObject = stream;
+      
+      const pc = new RTCPeerConnection(configuration);
+      setPeerConnection(pc);
+      
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+      
+      pc.ontrack = (event) => {
+        setRemoteStream(event.streams[0]);
+        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = event.streams[0];
+      };
+      
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('call:webrtc:signal', { signal: event.candidate, to: otherUser.id });
+        }
+      };
+      
+      pc.oniceconnectionstatechange = () => {
+        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+          endCall();
+        }
+      };
+      
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      
+      socket.emit('call:webrtc:signal', { signal: offer, to: otherUser.id });
+      socket.emit('call:start', {
+        to: otherUser.id,
+        from: user.id,
+        fromName: user.fullName,
+        isVideo
+      });
+      
+      setIsCalling(true);
+      toast.success(`Calling ${otherUser.fullName}...`);
+    } catch (err) {
+      console.error('Call error:', err);
+      toast.error('Please grant camera/microphone permissions');
+    }
+  };
+  
+  const acceptCall = async () => {
+    if (!incomingCall) return;
+    
+    if (window.currentRingtone) {
+      window.currentRingtone.pause();
+      window.currentRingtone = null;
+    }
+    
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: incomingCall.isVideo,
+        audio: true
+      });
+      setLocalStream(stream);
+      if (videoRef.current) videoRef.current.srcObject = stream;
+      
+      const pc = new RTCPeerConnection(configuration);
+      setPeerConnection(pc);
+      
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+      
+      pc.ontrack = (event) => {
+        setRemoteStream(event.streams[0]);
+        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = event.streams[0];
+      };
+      
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('call:webrtc:signal', { signal: event.candidate, to: incomingCall.fromId });
+        }
+      };
+      
+      socket.emit('call:accept', { to: incomingCall.fromId, from: user.id });
+      
+      setIsCallActive(true);
+      setIncomingCall(null);
+      toast.success('Call connected');
+      
+      let seconds = 0;
+      callTimerRef.current = setInterval(() => {
+        seconds++;
+        setCallDuration(seconds);
+      }, 1000);
+    } catch (err) {
+      console.error('Accept call error:', err);
+      toast.error('Failed to accept call');
+    }
+  };
+  
+  const declineCall = () => {
+    if (window.currentRingtone) {
+      window.currentRingtone.pause();
+      window.currentRingtone = null;
+    }
+    if (incomingCall) {
+      socket.emit('call:reject', { to: incomingCall.fromId });
+      setIncomingCall(null);
+      toast.success('Call declined');
+    }
+  };
+  
+  const endCall = () => {
+    if (callTimerRef.current) {
+      clearInterval(callTimerRef.current);
+      callTimerRef.current = null;
+    }
+    if (peerConnection) {
+      peerConnection.close();
+      setPeerConnection(null);
+    }
+    if (localStream) {
+      localStream.getTracks().forEach(track => track.stop());
+      setLocalStream(null);
+    }
+    if (remoteStream) {
+      remoteStream.getTracks().forEach(track => track.stop());
+      setRemoteStream(null);
+    }
+    setIsCallActive(false);
+    setIsCalling(false);
+    setIsMuted(false);
+    setIsVideoOff(false);
+    setCallDuration(0);
+  };
+  
+  const toggleMute = () => {
+    if (localStream) {
+      localStream.getAudioTracks().forEach(track => {
+        track.enabled = !track.enabled;
+      });
+      setIsMuted(!isMuted);
+    }
+  };
+  
+  const toggleVideo = () => {
+    if (localStream) {
+      localStream.getVideoTracks().forEach(track => {
+        track.enabled = !track.enabled;
+      });
+      setIsVideoOff(!isVideoOff);
+    }
+  };
+  
+  const formatDuration = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+  
+  // Message Status Component
+  const MessageStatus = ({ message, isOwn }) => {
+    if (!isOwn) return null;
+    
+    if (message.status === 'seen') {
+      return <FaCheckDouble className="text-blue-500 text-xs" title="Seen" />;
+    }
+    if (message.status === 'delivered') {
+      return <FaCheckDouble className="text-gray-400 text-xs" title="Delivered" />;
+    }
+    return <FaCheck className="text-gray-400 text-xs" title="Sent" />;
+  };
+  
+  // Audio Player - NO FILE NAME
+  const AudioPlayer = ({ audioUrl, messageId }) => {
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const [duration, setDuration] = useState(0);
+    const audioRef = useRef(null);
+    
+    useEffect(() => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      
+      const handleLoadedMetadata = () => setDuration(audio.duration);
+      const handleTimeUpdate = () => setProgress((audio.currentTime / audio.duration) * 100);
+      const handleEnded = () => {
+        setIsPlaying(false);
+        setProgress(0);
+        setPlayingAudioId(null);
+      };
+      
+      audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+      audio.addEventListener('timeupdate', handleTimeUpdate);
+      audio.addEventListener('ended', handleEnded);
+      
+      return () => {
+        audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+        audio.removeEventListener('timeupdate', handleTimeUpdate);
+        audio.removeEventListener('ended', handleEnded);
+      };
+    }, []);
+    
+    const togglePlay = () => {
+      if (playingAudioId && playingAudioId !== messageId) {
+        const prevAudio = audioRefs.current[playingAudioId];
+        if (prevAudio) {
+          prevAudio.pause();
+          prevAudio.currentTime = 0;
+        }
+      }
+      
+      if (isPlaying) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+        setPlayingAudioId(null);
+      } else {
+        audioRef.current.play();
+        setIsPlaying(true);
+        setPlayingAudioId(messageId);
+      }
+    };
+    
+    return (
+      <div className="flex items-center space-x-3 mt-1 min-w-[220px]">
+        <button 
+          onClick={togglePlay}
+          className="w-10 h-10 rounded-full bg-green-500 hover:bg-green-600 flex items-center justify-center transition shadow-md"
+        >
+          {isPlaying ? <FaPause size={16} className="text-white" /> : <FaPlay size={16} className="text-white ml-0.5" />}
+        </button>
+        <div className="flex-1">
+          <div className="h-1.5 bg-gray-300 rounded-full overflow-hidden">
+            <div 
+              className="h-full bg-green-500 rounded-full transition-all duration-100"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        </div>
+        <span className="text-xs text-gray-500 min-w-[40px]">
+          {duration ? `${Math.floor(duration)}s` : '0:00'}
+        </span>
+        <audio ref={audioRef} src={audioUrl} preload="metadata" />
+      </div>
+    );
+  };
+  
+  const getInitials = (name) => {
+    if (!name || name === 'Unknown') return '?';
+    return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   };
   
   const otherUser = getOtherParticipant();
-  const totalUnreadCount = chats.reduce((total, chat) => total + (chat.messages || []).filter(msg => msg.isRead === false && msg.senderId !== user?.id).length, 0);
   
   return (
-    <div className="flex h-[calc(100vh-4rem)] bg-gray-50 overflow-hidden">
-      {/* Chat List Sidebar */}
-      <div className={`${selectedChat && isMobile ? 'hidden' : 'flex'} flex-col w-full md:w-80 bg-white border-r shadow-sm h-full overflow-hidden`}>
-        <div className="p-4 border-b bg-white sticky top-0 z-10">
-          <div className="flex justify-between items-center mb-3">
-            <div><h2 className="text-xl font-bold text-gray-800">Messages</h2>{totalUnreadCount > 0 && <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-500 text-white ml-2">{totalUnreadCount} new</span>}</div>
-            <button onClick={() => setShowSearch(!showSearch)} className="p-2 rounded-full hover:bg-gray-100 transition"><FaUserPlus className="text-nts-green-600" size={18} /></button>
-          </div>
-          {showSearch && (<div className="mb-3"><div className="relative"><FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={14} /><input type="text" placeholder="Search users..." value={searchQuery} onChange={(e) => { setSearchQuery(e.target.value); searchUsers(e.target.value); }} className="w-full pl-10 pr-4 py-2 border rounded-xl focus:ring-2 focus:ring-nts-green-500 focus:border-transparent text-sm" autoFocus /></div>{searchResults.length > 0 && (<div className="absolute bg-white border rounded-xl shadow-lg mt-1 left-4 right-4 z-10 max-h-60 overflow-y-auto">{searchResults.map(result => (<button key={result.id} onClick={() => startChat(result.id)} className="w-full text-left px-4 py-3 hover:bg-gray-50 flex items-center space-x-3 transition border-b last:border-b-0"><div className="w-10 h-10 rounded-full bg-gradient-to-r from-nts-green-500 to-nts-green-700 flex items-center justify-center text-white font-bold text-sm">{getInitials(result.fullName)}</div><div><p className="font-semibold text-gray-800">{result.fullName}</p><p className="text-xs text-gray-500">{result.role}</p></div></button>))}</div>)}</div>)}
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {chats.length === 0 ? (<div className="text-center py-12 text-gray-400"><FaComment className="text-5xl mx-auto mb-3 opacity-50" /><p className="text-sm">No messages yet</p><button onClick={() => setShowSearch(true)} className="block mx-auto mt-3 text-nts-green-600 text-sm font-medium hover:underline">Start a conversation</button></div>) : (chats.map(chat => {
-            const other = !chat.isGroup ? chat.participants?.find(p => p.userId !== user.id)?.user : null;
-            const lastMessage = chat.messages?.[0];
-            const chatUnreadCount = (chat.messages || []).filter(msg => msg.isRead === false && msg.senderId !== user?.id).length;
-            const isActive = selectedChat?.id === chat.id;
-            return (<button key={chat.id} onClick={() => { setSelectedChat(chat); fetchMessages(chat.id); }} className={`w-full text-left p-4 hover:bg-gray-50 transition border-b ${isActive ? 'bg-nts-green-50 border-l-4 border-l-nts-green-600' : ''}`}><div className="flex items-center space-x-3"><div className="w-12 h-12 rounded-full bg-gradient-to-r from-nts-green-500 to-nts-green-700 flex items-center justify-center text-white font-bold shadow-sm">{getInitials(other?.fullName)}</div><div className="flex-1 min-w-0"><div className="flex justify-between items-baseline"><p className="font-semibold text-gray-800 truncate">{other?.fullName}</p>{lastMessage && !lastMessage.isDeleted && (<span className="text-xs text-gray-400 flex-shrink-0 ml-2">{new Date(lastMessage.createdAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>)}</div><p className="text-sm text-gray-500 truncate">{lastMessage && !lastMessage.isDeleted ? (lastMessage.fileUrl ? `📎 ${lastMessage.fileName || 'File'}` : (lastMessage.content || 'No messages yet')) : 'No messages yet'}</p></div>{chatUnreadCount > 0 && (<div className="bg-red-500 text-white text-xs rounded-full min-w-[20px] h-5 px-1.5 flex items-center justify-center font-bold shadow-sm">{chatUnreadCount}</div>)}</div></button>);
-          }))}
-        </div>
-      </div>
-      
-      {/* Chat Area */}
-      <div className={`${!selectedChat && isMobile ? 'hidden' : 'flex'} flex-1 flex-col bg-gray-50 relative h-full overflow-hidden`}>
-        {selectedChat && otherUser ? (
-          <>
-            <div className="bg-white border-b px-4 py-3 flex items-center justify-between shadow-sm sticky top-0 z-10">
-              <div className="flex items-center space-x-3">
-                <button onClick={goBackToChatList} className="p-2 rounded-full hover:bg-gray-100 transition md:hidden"><FaChevronLeft className="text-gray-600" size={18} /></button>
-                <Link to={`/profile/${otherUser.id}`} className="flex items-center space-x-3 group"><div className="w-10 h-10 rounded-full bg-gradient-to-r from-nts-green-500 to-nts-green-700 flex items-center justify-center text-white font-bold text-sm shadow-sm">{getInitials(otherUser.fullName)}</div><div><h3 className="font-semibold text-gray-800 group-hover:text-nts-green-600 transition text-sm md:text-base">{otherUser.fullName}</h3><p className="text-xs">{isTyping ? <span className="text-nts-green-600 animate-pulse">Typing...</span> : <span className="text-gray-500">{otherUser.role}</span>}</p></div></Link>
-              </div>
-              <button onClick={() => initiateCall(true)} disabled={isCalling} className="p-2 rounded-full hover:bg-gray-100 transition text-gray-500 hover:text-nts-green-600 disabled:opacity-50"><FaVideoCall size={18} /></button>
+    <>
+      <div className="flex h-[calc(100vh-4rem)] bg-gray-50 overflow-hidden">
+        {/* Chat List */}
+        <div className={`${isMobile && showChatArea ? 'hidden' : 'flex'} flex-col w-full md:w-80 bg-white border-r shadow-sm h-full overflow-hidden`}>
+          <div className="p-4 border-b bg-white sticky top-0 z-10">
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="text-xl font-bold text-gray-800">Messages</h2>
+              <button onClick={() => setShowSearch(!showSearch)} className="p-2 rounded-full hover:bg-gray-100">
+                <FaUserPlus className="text-green-600" size={18} />
+              </button>
             </div>
-            
-            {replyTo && (<div className="bg-gray-100 px-4 py-2 flex justify-between items-center border-b"><div className="flex items-center space-x-2 text-sm"><FaReply className="text-nts-green-600 flex-shrink-0" size={12} /><span className="text-gray-600 truncate">Replying to: {replyTo.content?.substring(0, 30) || replyTo.fileName || 'File'}</span></div><button onClick={() => setReplyTo(null)} className="text-gray-400 hover:text-gray-600 p-1"><FaTimes size={14} /></button></div>)}
-            
-            {editingMessage && (<div className="bg-gray-100 px-4 py-2 flex justify-between items-center border-b"><div className="flex items-center space-x-2 text-sm"><FaEdit className="text-blue-500 flex-shrink-0" size={12} /><span className="text-gray-600">Editing message</span></div><button onClick={() => { setEditingMessage(null); setInput(''); }} className="text-gray-400 hover:text-gray-600 p-1"><FaTimes size={14} /></button></div>)}
-            
-            {uploading && (<div className="bg-blue-50 px-4 py-2 border-b"><div className="flex items-center space-x-3"><div className="flex-1"><div className="bg-blue-200 rounded-full h-1.5"><div className="bg-blue-600 h-1.5 rounded-full transition-all" style={{ width: `${uploadProgress}%` }} /></div></div><span className="text-xs text-blue-600">{uploadProgress}%</span></div></div>)}
-            
-            <div ref={messagesContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-3 md:p-4 space-y-3 bg-gradient-to-b from-gray-50 to-gray-100">
-              {messages.length === 0 ? (<div className="flex flex-col items-center justify-center h-full text-gray-400"><FaComment className="text-5xl mb-3 opacity-30" /><p className="text-center text-sm">No messages yet</p><p className="text-xs">Send a message to start the conversation</p></div>) : (messages.map((message, idx) => {
-                const isOwn = message.senderId === user.id;
-                const showAvatar = !isOwn && (idx === 0 || messages[idx-1]?.senderId !== message.senderId);
-                return (<div key={message.id} className={`message-item flex ${isOwn ? 'justify-end' : 'justify-start'} items-end space-x-1 md:space-x-2 group`} data-message-id={message.id}>
-                  {!isOwn && showAvatar && (<div className="w-7 h-7 md:w-8 md:h-8 rounded-full bg-gradient-to-r from-nts-green-500 to-nts-green-700 flex items-center justify-center text-white font-bold text-xs flex-shrink-0 shadow-sm">{getInitials(message.sender?.fullName)}</div>)}
-                  {!isOwn && !showAvatar && <div className="w-7 md:w-8 flex-shrink-0" />}
-                  <div className={`relative max-w-[85%] md:max-w-[70%] ${isOwn ? 'order-first' : ''}`}>
-                    {message.replyTo && (<div className={`text-xs mb-1 px-2 py-1 rounded-lg inline-block ${isOwn ? 'bg-nts-green-500 text-nts-green-100' : 'bg-gray-100 text-gray-600'}`}><FaReply className="inline mr-1" size={10} /><span className="italic text-xs">{message.replyTo.content?.substring(0, 30) || message.replyTo.fileName || 'File'}</span></div>)}
-                    <div className={`px-3 py-2 md:px-4 md:py-2.5 rounded-2xl shadow-sm ${isOwn ? 'bg-nts-green-600 text-white rounded-br-sm' : 'bg-white text-gray-800 shadow-sm rounded-bl-sm'}`}>
-                      {message.content && <p className="text-sm break-words">{message.content}</p>}
-                      {message.fileUrl && renderFilePreview(message)}
-                      <div className={`flex items-center justify-end space-x-1 mt-1 ${message.content || message.fileUrl ? 'pt-1' : ''}`}>
-                        <span className={`text-[10px] ${isOwn ? 'text-nts-green-200' : 'text-gray-400'}`}>{new Date(message.createdAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
-                        {isOwn && (<span>{message.isRead ? <FaCheckDouble size={10} className="text-nts-green-200" /> : <FaCheck size={10} className="text-nts-green-200" />}</span>)}
-                        {message.isEdited && <span className={`text-[10px] ${isOwn ? 'text-nts-green-200' : 'text-gray-400'}`}>(edited)</span>}
+            {showSearch && (
+              <div className="mb-3">
+                <div className="relative">
+                  <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={14} />
+                  <input 
+                    type="text" 
+                    placeholder="Search users..." 
+                    value={searchQuery} 
+                    onChange={(e) => { setSearchQuery(e.target.value); searchUsers(e.target.value); }} 
+                    className="w-full pl-10 pr-4 py-2 border rounded-xl focus:ring-2 focus:ring-green-500 text-sm" 
+                  />
+                </div>
+                {searchResults.length > 0 && (
+                  <div className="absolute bg-white border rounded-xl shadow-lg mt-1 left-4 right-4 z-10 max-h-60 overflow-y-auto">
+                    {searchResults.map(result => (
+                      <button key={result.id} onClick={() => startChat(result.id)} className="w-full text-left px-4 py-3 hover:bg-gray-50 flex items-center space-x-3 border-b">
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-r from-green-500 to-green-700 flex items-center justify-center text-white font-bold text-sm">
+                          {getInitials(result.fullName)}
+                        </div>
+                        <div>
+                          <p className="font-semibold text-gray-800">{result.fullName}</p>
+                          <p className="text-xs text-gray-500">{result.role}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {chats.length === 0 ? (
+              <div className="text-center py-12 text-gray-400">
+                <FaComment className="text-5xl mx-auto mb-3 opacity-50" />
+                <p className="text-sm">No messages yet</p>
+                <button onClick={() => setShowSearch(true)} className="block mx-auto mt-3 text-green-600 text-sm font-medium hover:underline">
+                  Start a conversation
+                </button>
+              </div>
+            ) : (
+              chats.map(chat => {
+                const other = !chat.isGroup ? chat.participants?.find(p => p.userId !== user.id)?.user : null;
+                const lastMessage = chat.messages?.[0];
+                const isActive = selectedChat?.id === chat.id;
+                
+                if (!other || !other.fullName || other.fullName === 'Unknown') return null;
+                
+                let lastMessageText = 'No messages yet';
+                if (lastMessage?.content) lastMessageText = lastMessage.content;
+                else if (lastMessage?.fileType?.startsWith('audio/')) lastMessageText = '🎤 Voice message';
+                else if (lastMessage?.fileType?.startsWith('video/')) lastMessageText = '📹 Video';
+                else if (lastMessage?.fileType?.startsWith('image/')) lastMessageText = '📷 Photo';
+                
+                return (
+                  <button 
+                    key={chat.id} 
+                    onClick={() => selectChat(chat)} 
+                    className={`w-full text-left p-4 hover:bg-gray-50 transition border-b ${isActive && !isMobile ? 'bg-green-50 border-l-4 border-l-green-600' : ''}`}
+                  >
+                    <div className="flex items-center space-x-3">
+                      <div className="w-12 h-12 rounded-full bg-gradient-to-r from-green-500 to-green-700 flex items-center justify-center text-white font-bold shadow-sm">
+                        {getInitials(other?.fullName)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex justify-between items-baseline">
+                          <p className="font-semibold text-gray-800 truncate">{other?.fullName}</p>
+                          {lastMessage && (
+                            <span className="text-xs text-gray-400 flex-shrink-0 ml-2">
+                              {new Date(lastMessage.createdAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-500 truncate">{lastMessageText}</p>
                       </div>
                     </div>
-                    <div className={`absolute top-0 ${isOwn ? '-left-8 md:-left-10' : '-right-8 md:-right-10'} opacity-0 group-hover:opacity-100 transition`}>
-                      <div className="flex space-x-1 bg-white rounded-full shadow-md p-1">
-                        {isOwn && (<><button onClick={() => { setEditingMessage(message); setInput(message.content); }} className="p-1.5 rounded-full hover:bg-gray-100 text-blue-500"><FaEdit size={10} className="md:text-xs" /></button><button onClick={() => confirmDeleteMessage(message)} className="p-1.5 rounded-full hover:bg-gray-100 text-red-500"><FaTrash size={10} className="md:text-xs" /></button></>)}
-                        <button onClick={() => setReplyTo(message)} className="p-1.5 rounded-full hover:bg-gray-100 text-nts-green-600"><FaReply size={10} className="md:text-xs" /></button>
-                      </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+        
+        {/* Chat Area */}
+        <div className={`${isMobile && !showChatArea ? 'hidden' : 'flex'} flex-1 flex-col bg-gray-50 relative h-full overflow-hidden`}>
+          {selectedChat && otherUser ? (
+            <>
+              <div className="bg-white border-b px-4 py-3 flex items-center justify-between shadow-sm sticky top-0 z-10">
+                <div className="flex items-center space-x-3">
+                  {isMobile && (
+                    <button onClick={goBackToChatList} className="p-2 rounded-full hover:bg-gray-100 mr-2">
+                      <FaArrowLeft size={18} className="text-gray-600" />
+                    </button>
+                  )}
+                  <div className="flex items-center space-x-3">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-r from-green-500 to-green-700 flex items-center justify-center text-white font-bold text-sm shadow-sm">
+                      {getInitials(otherUser.fullName)}
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-gray-800 text-sm md:text-base">
+                        {otherUser.fullName}
+                      </h3>
+                      <p className="text-xs">
+                        {isTyping ? (
+                          <span className="text-green-600 animate-pulse">Typing...</span>
+                        ) : (
+                          <span className="text-gray-500">{otherUser.role}</span>
+                        )}
+                      </p>
                     </div>
                   </div>
-                </div>);
-              }))}
-              <div ref={messagesEndRef} />
-            </div>
-            
-            {showScrollButton && (<button onClick={() => scrollToBottom()} className="absolute bottom-20 right-4 bg-nts-green-600 text-white p-2 rounded-full shadow-lg hover:bg-nts-green-700 transition-all z-10"><FaArrowDown size={16} /></button>)}
-            
-            <div className="bg-white border-t px-3 py-2 md:px-4 md:py-3 shadow-sm">
-              <div className="flex items-end space-x-2">
-                <button onClick={() => fileInputRef.current?.click()} className="p-2 text-gray-500 hover:text-nts-green-600 rounded-full hover:bg-gray-100 transition"><FaPaperclip size={16} className="md:text-lg" /></button>
-                <input ref={fileInputRef} type="file" className="hidden" onChange={(e) => { if (e.target.files?.[0]) handleFileUpload(e.target.files[0]); e.target.value = ''; }} accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt" />
-                <div className="flex-1"><textarea value={input} onChange={handleTyping} onKeyPress={handleKeyPress} placeholder="Type a message..." rows="1" className="w-full px-3 py-2 border border-gray-200 rounded-2xl resize-none focus:ring-2 focus:ring-nts-green-500 focus:border-transparent text-sm bg-gray-50" disabled={uploading} style={{ maxHeight: '80px' }} /></div>
-                <button onClick={sendMessage} disabled={(!input.trim() && !replyTo) || sending || uploading} className="p-2 bg-nts-green-600 text-white rounded-full hover:bg-nts-green-700 disabled:opacity-50 transition shadow-sm"><FaPaperPlane size={14} className="md:text-base" /></button>
+                </div>
+                <button onClick={() => initiateCall(true)} disabled={isCalling || isCallActive} className="p-2 rounded-full hover:bg-gray-100 text-gray-500 hover:text-green-600 disabled:opacity-50">
+                  <FaVideoCall size={18} />
+                </button>
               </div>
-              <div className="mt-1 text-[10px] md:text-xs text-gray-400 flex items-center space-x-3"><span>📎 Attach files</span><span>⌨️ Enter to send</span></div>
+              
+              {/* Reply Preview */}
+              {replyingTo && (
+                <div className="bg-gray-100 px-4 py-2 border-l-4 border-green-500 flex justify-between items-center">
+                  <div className="flex-1">
+                    <p className="text-xs text-green-600 font-semibold">Replying to</p>
+                    <p className="text-sm text-gray-600 truncate">{replyingTo.content || 'Media'}</p>
+                  </div>
+                  <button onClick={() => setReplyingTo(null)} className="p-1 hover:bg-gray-200 rounded-full">
+                    <FaTimes size={12} />
+                  </button>
+                </div>
+              )}
+              
+              {/* Edit Preview */}
+              {editingMessage && (
+                <div className="bg-gray-100 px-4 py-2 border-l-4 border-blue-500 flex justify-between items-center">
+                  <div className="flex-1">
+                    <p className="text-xs text-blue-600 font-semibold">Editing</p>
+                    <p className="text-sm text-gray-600 truncate">{editingMessage.content}</p>
+                  </div>
+                  <button onClick={() => { setEditingMessage(null); setInput(''); }} className="p-1 hover:bg-gray-200 rounded-full">
+                    <FaTimes size={12} />
+                  </button>
+                </div>
+              )}
+              
+              <div 
+                ref={messagesContainerRef} 
+                onScroll={handleScroll}
+                className="flex-1 overflow-y-auto p-3 md:p-4 space-y-3"
+              >
+                {messages.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                    <FaComment className="text-5xl mb-3 opacity-30" />
+                    <p className="text-center text-sm">No messages yet</p>
+                    <p className="text-xs">Send a message to start</p>
+                  </div>
+                ) : (
+                  messages.map((message) => {
+                    const isOwn = message.senderId === user.id;
+                    const isAudio = message.fileType?.startsWith('audio/');
+                    const isVideo = message.fileType?.startsWith('video/');
+                    const isImage = message.fileType?.startsWith('image/');
+                    const repliedTo = message.replyToId ? messages.find(m => m.id === message.replyToId) : null;
+                    
+                    return (
+                      <div 
+                        key={message.id} 
+                        className={`flex ${isOwn ? 'justify-end' : 'justify-start'} message-item group relative`}
+                      >
+                        <div className={`max-w-[75%] px-4 py-2 rounded-2xl relative ${
+                          isOwn ? 'bg-green-600 text-white rounded-br-sm' : 'bg-white text-gray-800 shadow-sm rounded-bl-sm'
+                        }`}>
+                          {/* Reply Preview */}
+                          {repliedTo && (
+                            <div className={`text-xs mb-1 p-1 rounded ${isOwn ? 'bg-green-700' : 'bg-gray-100'} opacity-75`}>
+                              <p className="font-semibold">↳ {repliedTo.senderId === user.id ? 'You' : (repliedTo.sender?.fullName || 'User')}</p>
+                              <p className="truncate">{repliedTo.content || 'Media'}</p>
+                            </div>
+                          )}
+                          
+                          {message.content && <p className="text-sm break-words">{message.content}</p>}
+                          
+                          {/* FILE DISPLAYS - NO FILE NAMES */}
+                          {message.fileUrl && (
+                            <>
+                              {isImage && (
+                                <img 
+                                  src={message.fileUrl} 
+                                  alt="" 
+                                  className="max-w-full rounded mt-1 max-h-60 cursor-pointer" 
+                                  onClick={() => window.open(message.fileUrl)} 
+                                />
+                              )}
+                              {isVideo && (
+                                <video 
+                                  controls 
+                                  className="max-w-full rounded mt-1 max-h-60 w-full"
+                                  playsInline
+                                >
+                                  <source src={message.fileUrl} type={message.fileType} />
+                                </video>
+                              )}
+                              {isAudio && (
+                                <AudioPlayer audioUrl={message.fileUrl} messageId={message.id} />
+                              )}
+                            </>
+                          )}
+                          
+                          <div className="flex items-center justify-end space-x-1 mt-1">
+                            <span className={`text-[10px] ${isOwn ? 'text-green-200' : 'text-gray-400'}`}>
+                              {new Date(message.createdAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+                            </span>
+                            <MessageStatus message={message} isOwn={isOwn} />
+                          </div>
+                          
+                          {/* Desktop Hover Actions */}
+                          {!isMobile && (
+                            <div className="absolute -top-8 right-0 bg-white rounded-full shadow-lg flex space-x-1 p-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                              <button onClick={() => handleReplyClick(message)} className="p-1.5 hover:bg-gray-100 rounded-full text-gray-600" title="Reply">
+                                <FaReply size={12} />
+                              </button>
+                              {isOwn && (
+                                <>
+                                  <button onClick={() => handleEditClick(message)} className="p-1.5 hover:bg-gray-100 rounded-full text-gray-600" title="Edit">
+                                    <FaEdit size={12} />
+                                  </button>
+                                  <button onClick={() => { setSelectedMessage(message); setShowDeleteConfirm(true); }} className="p-1.5 hover:bg-red-100 rounded-full text-red-500" title="Delete">
+                                    <FaTrash size={12} />
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          )}
+                          
+                          {/* Mobile Action Button */}
+                          {isMobile && (
+                            <button onClick={() => { setSelectedMessage(message); setShowMessageOptions(true); }} className="absolute right-2 top-1/2 transform -translate-y-1/2">
+                              <FaEllipsisV size={14} className="text-gray-500" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+                <div ref={messagesEndRef} />
+              </div>
+              
+              {showScrollButton && (
+                <button onClick={scrollToBottom} className="absolute bottom-20 right-4 bg-green-600 text-white rounded-full p-2 shadow-lg hover:bg-green-700 transition z-10">
+                  <FaArrowDown size={16} />
+                </button>
+              )}
+              
+              <div className="bg-white border-t px-3 py-2 md:px-4 md:py-3 shadow-sm">
+                <div className="flex items-end space-x-2">
+                  <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="p-2 text-gray-500 hover:text-green-600 rounded-full hover:bg-gray-100 disabled:opacity-50">
+                    <FaPaperclip size={16} />
+                  </button>
+                  <button onClick={isRecording ? stopVoiceRecording : startVoiceRecording} disabled={uploading} className={`p-2 rounded-full transition ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'text-gray-500 hover:text-green-600 hover:bg-gray-100'} disabled:opacity-50`}>
+                    {isRecording ? <FaStop size={14} /> : <FaMicrophone size={16} />}
+                  </button>
+                  <input ref={fileInputRef} type="file" accept="image/*,video/*,audio/*" className="hidden" onChange={(e) => { if (e.target.files?.[0]) handleFileUpload(e.target.files[0]); e.target.value = ''; }} />
+                  <div className="flex-1">
+                    <textarea 
+                      value={input} 
+                      onChange={handleTyping} 
+                      onKeyPress={handleKeyPress} 
+                      placeholder={editingMessage ? "Edit..." : replyingTo ? "Reply..." : "Type a message..."} 
+                      rows="1" 
+                      className="w-full px-3 py-2 border border-gray-200 rounded-2xl resize-none focus:ring-2 focus:ring-green-500 text-sm bg-gray-50" 
+                      style={{ maxHeight: '80px' }} 
+                    />
+                  </div>
+                  <button onClick={editingMessage ? editMessage : sendMessage} disabled={(!input.trim() && !editingMessage) || sending} className="p-2 bg-green-600 text-white rounded-full hover:bg-green-700 disabled:opacity-50 transition shadow-sm">
+                    <FaPaperPlane size={14} />
+                  </button>
+                </div>
+                <div className="mt-1 text-[10px] md:text-xs text-gray-400 flex items-center space-x-3">
+                  <span>📎 Attach</span>
+                  <span>{isRecording ? '🔴 Recording...' : '🎙️ Voice'}</span>
+                  <span>⌨️ Enter to send</span>
+                  <span>↩️ Swipe reply</span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 flex items-center justify-center p-4">
+              <div className="text-center text-gray-400">
+                <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <FaComment className="text-3xl text-gray-300" />
+                </div>
+                <p className="text-base font-medium text-gray-500">No conversation selected</p>
+                <p className="text-xs mt-1">Choose a chat or start a new one</p>
+                <button onClick={() => setShowSearch(true)} className="mt-4 px-4 py-2 bg-green-600 text-white rounded-full text-sm font-medium hover:bg-green-700">
+                  Find Students
+                </button>
+              </div>
             </div>
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center p-4">
-            <div className="text-center text-gray-400"><div className="w-20 h-20 md:w-24 md:h-24 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4"><FaComment className="text-3xl md:text-4xl text-gray-300" /></div><p className="text-base md:text-lg font-medium text-gray-500">No conversation selected</p><p className="text-xs md:text-sm mt-1">Choose a chat or start a new one</p><button onClick={() => setShowSearch(true)} className="mt-4 px-4 py-2 bg-nts-green-600 text-white rounded-full text-sm font-medium hover:bg-nts-green-700 transition shadow-sm">Find Students</button></div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
       
-      {/* Incoming Call Modal */}
-      {incomingCall && (<div className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center animate-fadeIn"><div className="bg-white rounded-2xl p-6 max-w-sm w-full mx-4 transform transition-all animate-scaleIn"><div className="text-center"><div className="w-20 h-20 bg-nts-green-100 rounded-full flex items-center justify-center mx-auto mb-4"><FaVideoCall className="text-nts-green-600 text-3xl" /></div><h3 className="text-xl font-bold text-gray-800 mb-2">Incoming Call</h3><p className="text-gray-600 mb-6">{incomingCall.fromName} is calling you...</p><div className="flex gap-4 justify-center"><button onClick={acceptCall} className="px-6 py-2 bg-green-500 text-white rounded-full font-semibold hover:bg-green-600 transition flex items-center space-x-2"><FaVideoCall size={16} /><span>Accept</span></button><button onClick={rejectCall} className="px-6 py-2 bg-red-500 text-white rounded-full font-semibold hover:bg-red-600 transition flex items-center space-x-2"><FaPhoneSlash size={16} /><span>Decline</span></button></div></div></div></div>)}
+      {/* Mobile Message Options Modal */}
+      {showMessageOptions && selectedMessage && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-end justify-center" onClick={() => setShowMessageOptions(false)}>
+          <div className="bg-white rounded-t-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="p-4">
+              <div className="w-12 h-1 bg-gray-300 rounded-full mx-auto mb-4"></div>
+              <button onClick={() => handleReplyClick(selectedMessage)} className="w-full text-left px-4 py-3 hover:bg-gray-100 rounded-lg flex items-center space-x-3">
+                <FaReply className="text-green-600" />
+                <span>Reply</span>
+              </button>
+              {selectedMessage.senderId === user.id && (
+                <>
+                  <button onClick={() => handleEditClick(selectedMessage)} className="w-full text-left px-4 py-3 hover:bg-gray-100 rounded-lg flex items-center space-x-3">
+                    <FaEdit className="text-blue-600" />
+                    <span>Edit</span>
+                  </button>
+                  <button onClick={() => { setShowMessageOptions(false); setShowDeleteConfirm(true); }} className="w-full text-left px-4 py-3 hover:bg-gray-100 rounded-lg flex items-center space-x-3 text-red-600">
+                    <FaTrash />
+                    <span>Delete</span>
+                  </button>
+                </>
+              )}
+              <button onClick={() => setShowMessageOptions(false)} className="w-full text-center px-4 py-3 hover:bg-gray-100 rounded-lg mt-2 font-semibold">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && selectedMessage && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full mx-4">
+            <h3 className="text-lg font-bold text-gray-800 mb-2">Delete Message</h3>
+            <p className="text-gray-600 mb-6">Are you sure you want to delete this message?</p>
+            <div className="flex gap-3">
+              <button onClick={() => { setShowDeleteConfirm(false); setSelectedMessage(null); }} className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 font-semibold hover:bg-gray-50">
+                Cancel
+              </button>
+              <button onClick={deleteMessage} className="flex-1 px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600">
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* Video Call Modal */}
-      {isCallActive && (<div className="fixed inset-0 bg-black bg-opacity-95 z-50 flex flex-col"><div className="flex-1 flex items-center justify-center p-2 md:p-4"><div className="relative w-full max-w-6xl h-full flex flex-col lg:flex-row gap-2 md:gap-4"><div className="flex-1 bg-gray-900 rounded-xl md:rounded-2xl overflow-hidden relative"><video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />{!remoteStream && (<div className="absolute inset-0 flex items-center justify-center text-white text-sm md:text-base"><p>{isCalling ? 'Calling...' : 'Connecting...'}</p></div>)}<div className="absolute bottom-4 left-4 bg-black bg-opacity-50 px-3 py-1 rounded-full text-white text-sm">{otherUser?.fullName}</div></div><div className="lg:w-80 h-48 lg:h-auto bg-gray-800 rounded-2xl overflow-hidden relative shadow-xl"><video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" /><div className="absolute bottom-2 left-2 bg-black bg-opacity-50 px-2 py-0.5 rounded-full text-white text-xs">You</div></div></div></div><div className="bg-gray-900 p-4 flex items-center justify-center space-x-4"><button onClick={toggleMute} className={`p-4 rounded-full transition ${isMuted ? 'bg-red-500 text-white' : 'bg-gray-700 text-white hover:bg-gray-600'}`}>{isMuted ? <FaMicrophoneSlash size={24} /> : <FaMicrophone size={24} />}</button><button onClick={toggleVideo} className={`p-4 rounded-full transition ${isVideoOff ? 'bg-red-500 text-white' : 'bg-gray-700 text-white hover:bg-gray-600'}`}>{isVideoOff ? <FaVideoSlash size={24} /> : <FaVideoCall size={24} />}</button><button onClick={endCall} className="p-4 rounded-full bg-red-500 text-white hover:bg-red-600 transition"><FaPhoneSlash size={24} /></button></div></div>)}
+      {isCallActive && (
+        <div className="fixed inset-0 bg-black z-50 flex flex-col">
+          <div className="flex-1 relative bg-black">
+            <video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover" />
+            <div className="absolute bottom-4 right-4 w-32 h-48 bg-black rounded-lg overflow-hidden shadow-lg border-2 border-white z-10">
+              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+            </div>
+            <div className="absolute top-4 left-4 text-white bg-black bg-opacity-50 px-3 py-1 rounded-full text-sm">
+              {otherUser?.fullName} • {formatDuration(callDuration)}
+            </div>
+          </div>
+          <div className="bg-black bg-opacity-90 p-4 flex justify-center space-x-4">
+            <button onClick={toggleMute} className={`w-12 h-12 rounded-full flex items-center justify-center ${isMuted ? 'bg-red-500' : 'bg-gray-700'}`}>
+              {isMuted ? <FaMicrophoneSlash size={20} className="text-white" /> : <FaMicrophone size={20} className="text-white" />}
+            </button>
+            <button onClick={toggleVideo} className={`w-12 h-12 rounded-full flex items-center justify-center ${isVideoOff ? 'bg-red-500' : 'bg-gray-700'}`}>
+              {isVideoOff ? <FaVideoSlash size={20} className="text-white" /> : <FaVideoCall size={20} className="text-white" />}
+            </button>
+            <button onClick={endCall} className="w-12 h-12 rounded-full bg-red-500 flex items-center justify-center">
+              <FaPhoneSlash size={20} className="text-white" />
+            </button>
+          </div>
+        </div>
+      )}
       
-      {/* Delete Modal */}
-      {showDeleteModal && (<div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-2xl p-5 md:p-6 max-w-sm w-full mx-4"><div className="text-center"><div className="w-14 h-14 md:w-16 md:h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-3 md:mb-4"><FaTrash className="text-red-500 text-xl md:text-2xl" /></div><h3 className="text-lg md:text-xl font-bold text-gray-800 mb-2">Delete Message?</h3><p className="text-gray-500 text-xs md:text-sm mb-5 md:mb-6">This action cannot be undone.</p><div className="flex gap-3"><button onClick={() => { setShowDeleteModal(false); setMessageToDelete(null); }} className="flex-1 px-3 py-2 border rounded-xl text-sm font-medium hover:bg-gray-50">Cancel</button><button onClick={handleDeleteMessage} className="flex-1 px-3 py-2 bg-red-500 text-white rounded-xl text-sm font-medium hover:bg-red-600">Delete</button></div></div></div></div>)}
-    </div>
+      {/* Incoming Call Modal */}
+      {incomingCall && (
+        <div className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full mx-4">
+            <div className="text-center">
+              <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <FaPhoneAlt className="text-green-600 text-3xl animate-bounce" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-800 mb-2">Incoming Call</h3>
+              <p className="text-gray-600 mb-1 text-lg font-semibold">{incomingCall.fromName}</p>
+              <p className="text-sm text-gray-500 mb-6">{incomingCall.isVideo ? 'Video call' : 'Voice call'}...</p>
+              <div className="flex gap-4 justify-center">
+                <button onClick={acceptCall} className="px-8 py-3 bg-green-500 text-white rounded-full font-semibold hover:bg-green-600 flex items-center gap-2">
+                  <FaPhone size={16} /> Accept
+                </button>
+                <button onClick={declineCall} className="px-8 py-3 bg-red-500 text-white rounded-full font-semibold hover:bg-red-600 flex items-center gap-2">
+                  <FaPhoneSlash size={16} /> Decline
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 };
 

@@ -1,4 +1,4 @@
- import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { io } from 'socket.io-client';
@@ -9,6 +9,8 @@ import {
 } from 'react-icons/fa';
 import toast from 'react-hot-toast';
 import api, { uploadFile } from '../services/api';
+
+const SOCKET_URL = 'https://nts-backend-409a.onrender.com';
 
 const Feed = () => {
   const { user, token } = useAuthStore();
@@ -36,7 +38,7 @@ const Feed = () => {
   const [socket, setSocket] = useState(null);
 
   useEffect(() => {
-    const newSocket = io(process.env.REACT_APP_API_URL?.replace('/api', '') || 'http://localhost:5000', { auth: { token } });
+    const newSocket = io(SOCKET_URL, { auth: { token } });
     setSocket(newSocket);
 
     fetchPosts();

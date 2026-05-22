@@ -1,9 +1,11 @@
- import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuthStore } from '../store/authStore';
 import { FaMapMarkerAlt, FaClock, FaMoneyBillWave, FaCalendarAlt, FaCheckCircle, FaTimesCircle, FaHourglassHalf, FaEnvelope } from 'react-icons/fa';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { io } from 'socket.io-client';
+
+const SOCKET_URL = 'https://nts-backend-409a.onrender.com';
 
 const Internships = () => {
   const { user, token } = useAuthStore();
@@ -17,7 +19,7 @@ const Internships = () => {
   const [showMessageModal, setShowMessageModal] = useState(false);
   
   useEffect(() => {
-    const newSocket = io(process.env.REACT_APP_API_URL?.replace('/api', '') || 'http://localhost:5000', { auth: { token } });
+    const newSocket = io(SOCKET_URL, { auth: { token } });
     setSocket(newSocket);
     fetchInternships();
     fetchUserApplications();
