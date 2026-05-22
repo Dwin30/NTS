@@ -1,8 +1,9 @@
-[build]
-  base = "frontend"
-  command = "npm run build"
-  publish = "frontend/build"
-
-[build.environment]
-  REACT_APP_API_URL = "https://nts-backend-409a.onrender.com/api"
-  SOCKET_URL = "https://nts-backend-409a.onrender.com"
+[build] 
+  base = "frontend" 
+  command = "CI=false npm run build" 
+  publish = "build" 
+ 
+[build.environment] 
+  REACT_APP_API_URL = "https://nts-backend-409a.onrender.com/api" 
+  SOCKET_URL = "https://nts-backend-409a.onrender.com" 
+  CI = "false" 
