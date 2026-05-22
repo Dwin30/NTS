@@ -34,7 +34,9 @@ const io = socketIO(server, {
       "https://exquisite-souffle-c3acd0.netlify.app",
       "https://polite-cucurucho-d21021.netlify.app",
       "https://nts-platform.netlify.app",
-      "https://*.netlify.app"
+      "https://nts-iey7-dwin30s-projects.vercel.app",  // ADDED: Your Vercel frontend URL
+      "https://*.netlify.app",
+      "https://*.vercel.app"  // ADDED: Allow all Vercel preview deployments
     ],
     credentials: true,
     methods: ["GET", "POST"]
@@ -188,7 +190,9 @@ app.use(cors({
     "https://exquisite-souffle-c3acd0.netlify.app",
     "https://polite-cucurucho-d21021.netlify.app",
     "https://nts-platform.netlify.app",
-    "https://*.netlify.app"
+    "https://nts-iey7-dwin30s-projects.vercel.app",  // ADDED: Your Vercel frontend URL
+    "https://*.netlify.app",
+    "https://*.vercel.app"  // ADDED: Allow all Vercel preview deployments
   ], 
   credentials: true 
 }));
