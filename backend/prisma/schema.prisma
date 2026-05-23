@@ -51,6 +51,8 @@ model Post {
   
   likes    Like[]
   comments Comment[]
+  isShared       Boolean  @default(false)
+  originalPostId String?
 }
 
 model Like {
@@ -119,6 +121,8 @@ model Message {
   isDeleted  Boolean  @default(false)
   deletedBy  String?
   createdAt  DateTime @default(now())
+  reactions    String?   // JSON string of reactions
+  deliveredAt  DateTime?
 }
 
 model Internship {
