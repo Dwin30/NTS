@@ -7,7 +7,7 @@ import {
   FaTrash, FaEdit, FaReply, FaTimes, FaPaperclip,
   FaArrowLeft, FaVideo as FaVideoCall, FaMicrophone, FaMicrophoneSlash,
   FaVideoSlash, FaPhoneSlash, FaArrowDown, FaPlay, FaPause,
-  FaPhone, FaPhoneAlt, FaStop
+  FaPhone, FaPhoneAlt, FaStop, FaSmile
 } from 'react-icons/fa';
 import toast from 'react-hot-toast';
 import api from '../services/api';
