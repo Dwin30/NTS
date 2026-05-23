@@ -27,8 +27,8 @@ model User {
   posts          Post[]
   likes          Like[]
   comments       Comment[]
-  sentMessages   Message[]
-  receivedMessages Message[]
+  sentMessages   Message[] @relation("sentMessages")
+  receivedMessages Message[] @relation("receivedMessages")
   chatParticipants ChatParticipant[]
   internshipApplications InternshipApplication[]
 }
