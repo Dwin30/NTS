@@ -1,66 +1,54 @@
 generator client {
-  provider      = "prisma-client-js"
-  binaryTargets = ["native", "debian-openssl-3.0.x"]
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = "postgresql://nts_database_user:llGHTWUpCs9N2NqKTkPgdlh4d30UVmlp@dpg-d86ulv6k1jcs739msak0-a:5432/nts_database"
+  url      = env("DATABASE_URL")
 }
 
 model User {
-  id             String   @id @default(cuid())
-  email          String   @unique
-  fullName       String
-  passwordHash   String
-  role           String   @default("STUDENT")
-  isVerified     Boolean  @default(false)
-  otpCode        String?
-  otpExpiresAt   DateTime?
-  avatar         String?
-  bio            String?
-  phone          String?
-  school         String?
-  postsCount     Int      @default(0)
-  followersCount Int      @default(0)
-  followingCount Int      @default(0)
-  lastSeen       DateTime? @default(now())
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id        String   @id @default(cuid())
+  email     String   @unique
+  fullName  String
+  passwordHash String
+  role      String   @default("STUDENT")
+  isVerified Boolean  @default(true)
+  avatar    String?
+  bio       String?
+  phone     String?
+  school    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
   
-  posts            Post[]
-  likes            Like[]
-  comments         Comment[]
-  sentMessages     Message[] @relation("sentMessages")
+  posts          Post[]
+  likes          Like[]
+  comments       Comment[]
+  sentMessages   Message[] @relation("sentMessages")
   receivedMessages Message[] @relation("receivedMessages")
   chatParticipants ChatParticipant[]
-  internshipApplications InternshipApplication[]
-  notifications     Notification[]
 }
 
 model Post {
-  id          String   @id @default(cuid())
-  content     String
-  imageUrl    String?
-  authorId    String
-  author      User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  likesCount  Int      @default(0)
-  commentsCount Int    @default(0)
-  sharesCount Int      @default(0)
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  content   String
+  imageUrl  String?
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  isDeleted Boolean  @default(false)
   
   likes    Like[]
   comments Comment[]
-  isShared       Boolean  @default(false)
-  originalPostId String?
 }
 
 model Like {
   id        String   @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id])
   postId    String
-  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  post      Post     @relation(fields: [postId], references: [id])
   createdAt DateTime @default(now())
   
   @@unique([userId, postId])
@@ -70,19 +58,19 @@ model Comment {
   id        String   @id @default(cuid())
   content   String
   authorId  String
-  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  author    User     @relation(fields: [authorId], references: [id])
   postId    String
-  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  post      Post     @relation(fields: [postId], references: [id])
+  createdAt DateTime @default(now())
   isEdited  Boolean  @default(false)
   editedAt  DateTime?
-  createdAt DateTime @default(now())
 }
 
 model Chat {
-  id           String   @id @default(cuid())
-  name         String?
-  isGroup      Boolean  @default(false)
-  createdAt    DateTime @default(now())
+  id        String   @id @default(cuid())
+  name      String?
+  isGroup   Boolean  @default(false)
+  createdAt DateTime @default(now())
   
   participants ChatParticipant[]
   messages     Message[]
@@ -91,9 +79,9 @@ model Chat {
 model ChatParticipant {
   id        String   @id @default(cuid())
   chatId    String
-  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chat      Chat     @relation(fields: [chatId], references: [id])
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id])
   joinedAt  DateTime @default(now())
   
   @@unique([chatId, userId])
@@ -103,26 +91,22 @@ model Message {
   id         String   @id @default(cuid())
   content    String
   senderId   String
-  sender     User     @relation("sentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  sender     User     @relation("sentMessages", fields: [senderId], references: [id])
   receiverId String?
-  receiver   User?    @relation("receivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+  receiver   User?    @relation("receivedMessages", fields: [receiverId], references: [id])
   chatId     String?
-  chat       Chat?    @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chat       Chat?    @relation(fields: [chatId], references: [id])
   fileUrl    String?
   fileType   String?
   fileName   String?
   replyToId  String?
   replyTo    Message? @relation("MessageReply", fields: [replyToId], references: [id])
-  replies    Message[] @relation("MessageReply")
   isRead     Boolean  @default(false)
   readAt     DateTime?
   isEdited   Boolean  @default(false)
   editedAt   DateTime?
   isDeleted  Boolean  @default(false)
-  deletedBy  String?
   createdAt  DateTime @default(now())
-  reactions    String?   // JSON string of reactions
-  deliveredAt  DateTime?
 }
 
 model Internship {
@@ -134,7 +118,6 @@ model Internship {
   duration    Int
   stipend     Int      @default(0)
   deadline    DateTime
-  tradeId     Int?
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   
@@ -144,9 +127,9 @@ model Internship {
 model InternshipApplication {
   id           String   @id @default(cuid())
   studentId    String
-  student      User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  student      User     @relation(fields: [studentId], references: [id])
   internshipId String
-  internship   Internship @relation(fields: [internshipId], references: [id], onDelete: Cascade)
+  internship   Internship @relation(fields: [internshipId], references: [id])
   status       String   @default("PENDING")
   message      String?
   appliedAt    DateTime @default(now())
@@ -155,14 +138,21 @@ model InternshipApplication {
   @@unique([studentId, internshipId])
 }
 
-model Notification {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type      String
-  title     String
-  message   String
-  relatedId String?
-  isRead    Boolean  @default(false)
-  createdAt DateTime @default(now())
+model Trade {
+  id      Int    @id @default(autoincrement())
+  name    String
+  description String?
+  icon    String?
+  color   String?
+  modules Module[]
+}
+
+model Module {
+  id          Int    @id @default(autoincrement())
+  tradeId     Int
+  trade       Trade  @relation(fields: [tradeId], references: [id])
+  level       Int
+  code        String
+  name        String
+  description String?
 }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useLocation, Link, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { io } from 'socket.io-client';
 import { 
@@ -47,7 +47,6 @@ const Messages = () => {
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [callDuration, setCallDuration] = useState(0);
   const [showReactionPicker, setShowReactionPicker] = useState(null);
-  const [swipedMessageId, setSwipedMessageId] = useState(null);
   const [touchStartX, setTouchStartX] = useState(0);
   const [touchEndX, setTouchEndX] = useState(0);
   
@@ -62,18 +61,13 @@ const Messages = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [mediaRecorder, setMediaRecorder] = useState(null);
   
-  // Reaction Picker Component
+  // Reaction Picker
   const ReactionPicker = ({ onSelect, onClose }) => {
     const reactions = ['❤️', '👍', '😂', '😮', '😢', '😡'];
-    
     return (
-      <div className="reaction-picker absolute -top-12 left-0 flex gap-2 bg-white rounded-full p-2 shadow-lg z-20 dark:bg-gray-700">
+      <div className="absolute -top-12 left-0 flex gap-2 bg-white rounded-full p-2 shadow-lg z-20 dark:bg-gray-800">
         {reactions.map(emoji => (
-          <button
-            key={emoji}
-            onClick={() => { onSelect(emoji); onClose(); }}
-            className="reaction-emoji text-2xl hover:scale-125 transition-transform"
-          >
+          <button key={emoji} onClick={() => { onSelect(emoji); onClose(); }} className="text-2xl hover:scale-125 transition-transform">
             {emoji}
           </button>
         ))}
@@ -81,86 +75,39 @@ const Messages = () => {
     );
   };
   
-  // Touch handlers for swipe gestures
+  // Swipe handlers
   const handleTouchStart = (e) => {
     setTouchStartX(e.targetTouches[0].clientX);
-    setSwipedMessageId(null);
-  };
-  
-  const handleTouchMove = (e, messageId) => {
-    setTouchEndX(e.targetTouches[0].clientX);
-    const diff = touchStartX - e.targetTouches[0].clientX;
-    if (Math.abs(diff) > 30) {
-      setSwipedMessageId(messageId);
-    }
   };
   
   const handleTouchEnd = (message) => {
-    if (!touchStartX || !touchEndX) {
-      setSwipedMessageId(null);
-      return;
-    }
-    
-    const diff = touchStartX - touchEndX;
-    const minSwipeDistance = 50;
-    
-    if (diff > minSwipeDistance) {
-      // Swipe left - Reply
+    if (!touchStartX) return;
+    const diff = touchStartX - (touchEndX || touchStartX);
+    if (diff > 50) {
       handleReplyClick(message);
-    } else if (diff < -minSwipeDistance) {
-      // Swipe right - Delete (only for own messages)
-      if (message.senderId === user.id) {
-        setSelectedMessage(message);
-        setShowDeleteConfirm(true);
-      }
+    } else if (diff < -50 && message.senderId === user.id) {
+      setSelectedMessage(message);
+      setShowDeleteConfirm(true);
     }
-    
-    setSwipedMessageId(null);
     setTouchStartX(0);
     setTouchEndX(0);
   };
   
-  // Handle mobile back button
-  useEffect(() => {
-    const handlePopState = () => {
-      if (isMobile && showChatArea) {
-        goBackToChatList();
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [isMobile, showChatArea]);
+  const handleTouchMove = (e) => {
+    setTouchEndX(e.targetTouches[0].clientX);
+  };
   
   useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
-      if (window.innerWidth >= 768) setShowChatArea(false);
-    };
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
   
-  // Socket connection
   useEffect(() => {
     if (!token || !user) return;
     
-    const newSocket = io(SOCKET_URL, { 
-      auth: { token },
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionAttempts: 5,
-    });
-    
-    newSocket.on('connect', () => {
-      console.log('Socket connected');
-      newSocket.emit('user:online', { userId: user.id });
-    });
-    
-    newSocket.on('connect_error', (error) => {
-      console.error('Socket error:', error);
-    });
-    
+    const newSocket = io(SOCKET_URL, { auth: { token } });
     setSocket(newSocket);
     fetchChats();
     
@@ -170,51 +117,27 @@ const Messages = () => {
       if (isMobile) setShowChatArea(true);
     }
     
-    return () => {
-      if (newSocket) {
-        newSocket.emit('user:offline', { userId: user.id });
-        newSocket.disconnect();
-      }
-    };
+    return () => newSocket.disconnect();
   }, [token, user]);
   
-  // Socket event listeners
   useEffect(() => {
     if (!socket) return;
     
     socket.on('message:received', (message) => {
       if (selectedChat?.id === message.chatId) {
-        setMessages(prev => {
-          if (prev.some(m => m.id === message.id)) return prev;
-          return [...prev, { ...message, status: 'delivered' }];
-        });
-        setTimeout(() => scrollToBottom(), 100);
-        socket.emit('message:delivered', { messageId: message.id, to: message.senderId });
+        setMessages(prev => [...prev, message]);
+        scrollToBottom();
+        socket.emit('message:read', { messageId: message.id, senderId: message.senderId });
       }
       fetchChats();
     });
     
-    socket.on('message:delivered', ({ messageId }) => {
-      setMessages(prev => prev.map(msg => 
-        msg.id === messageId ? { ...msg, status: 'delivered' } : msg
-      ));
-    });
-    
-    socket.on('message:seen', ({ messageId }) => {
-      setMessages(prev => prev.map(msg => 
-        msg.id === messageId ? { ...msg, status: 'seen' } : msg
-      ));
-    });
-    
-    socket.on('message:reacted', ({ messageId, reaction }) => {
-      setMessages(prev => prev.map(msg => 
-        msg.id === messageId ? { ...msg, reaction } : msg
-      ));
+    socket.on('message:read', ({ messageId }) => {
+      setMessages(prev => prev.map(msg => msg.id === messageId ? { ...msg, isRead: true } : msg));
     });
     
     socket.on('message:updated', (updatedMessage) => {
       setMessages(prev => prev.map(msg => msg.id === updatedMessage.id ? updatedMessage : msg));
-      fetchChats();
     });
     
     socket.on('message:deleted', ({ messageId }) => {
@@ -223,82 +146,58 @@ const Messages = () => {
     });
     
     socket.on('typing:start', ({ userId }) => {
-      const otherUser = getOtherParticipant();
-      if (otherUser && otherUser.id === userId) setIsTyping(true);
+      const other = getOtherParticipant();
+      if (other?.id === userId) setIsTyping(true);
     });
     
     socket.on('typing:stop', ({ userId }) => {
-      const otherUser = getOtherParticipant();
-      if (otherUser && otherUser.id === userId) setIsTyping(false);
+      const other = getOtherParticipant();
+      if (other?.id === userId) setIsTyping(false);
     });
     
-    // Video Call Events - FIXED
+    // Call events
     socket.on('call:incoming', (data) => {
-      console.log('📞 Incoming call from:', data);
       setIncomingCall(data);
       const audio = new Audio('/ringtone.mp3');
       audio.loop = true;
-      audio.play().catch(e => console.log('Ringtone play failed'));
+      audio.play().catch(e => console.log('Ringtone error'));
       window.currentRingtone = audio;
       toast.success(`${data.fromName} is calling...`);
     });
     
-    socket.on('call:accepted', async ({ signal }) => {
-      console.log('Call accepted, setting remote description');
-      if (peerConnection && signal) {
-        try {
-          await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
-          setIsCallActive(true);
-          setIsCalling(false);
-          toast.success('Call connected');
-          let seconds = 0;
-          callTimerRef.current = setInterval(() => {
-            seconds++;
-            setCallDuration(seconds);
-          }, 1000);
-        } catch (error) {
-          console.error('Error setting remote description:', error);
-        }
+    socket.on('call:accepted', ({ answer }) => {
+      if (peerConnection && answer) {
+        peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        setIsCallActive(true);
+        setIsCalling(false);
+        toast.success('Call connected');
+        let seconds = 0;
+        callTimerRef.current = setInterval(() => {
+          seconds++;
+          setCallDuration(seconds);
+        }, 1000);
       }
     });
     
     socket.on('call:rejected', () => {
-      console.log('Call rejected');
       endCall();
       toast.error('Call rejected');
     });
     
     socket.on('call:ended', () => {
-      console.log('Call ended');
       endCall();
       toast.info('Call ended');
     });
     
-    socket.on('call:webrtc:signal', async ({ signal, from }) => {
-      console.log('Received WebRTC signal from:', from);
+    socket.on('call:ice-candidate', ({ candidate }) => {
       if (peerConnection) {
-        try {
-          if (signal.type === 'offer') {
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-            socket.emit('call:webrtc:signal', { signal: answer, to: from });
-          } else if (signal.type === 'answer') {
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
-          } else if (signal.candidate) {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(signal));
-          }
-        } catch (error) {
-          console.error('WebRTC error:', error);
-        }
+        peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
       }
     });
     
     return () => {
       socket.off('message:received');
-      socket.off('message:delivered');
-      socket.off('message:seen');
-      socket.off('message:reacted');
+      socket.off('message:read');
       socket.off('message:updated');
       socket.off('message:deleted');
       socket.off('typing:start');
@@ -307,52 +206,35 @@ const Messages = () => {
       socket.off('call:accepted');
       socket.off('call:rejected');
       socket.off('call:ended');
-      socket.off('call:webrtc:signal');
+      socket.off('call:ice-candidate');
     };
   }, [socket, selectedChat]);
   
   const getOtherParticipant = useCallback(() => {
     if (!selectedChat || selectedChat.isGroup) return null;
-    const participant = selectedChat.participants?.find(p => p.userId !== user.id);
-    return participant?.user || participant;
+    return selectedChat.participants?.find(p => p.userId !== user.id)?.user;
   }, [selectedChat, user.id]);
   
   const fetchChats = async () => {
     try {
       const res = await api.get('/chat');
-      const chatData = res.data || [];
-      const validChats = chatData.filter(chat => {
-        if (chat.isGroup) return true;
-        const otherUser = chat.participants?.find(p => p.userId !== user.id)?.user;
-        return otherUser && otherUser.fullName && otherUser.fullName !== 'Unknown';
-      });
-      setChats(validChats);
-      const totalUnread = validChats.reduce((total, chat) => {
-        return total + (chat.messages || []).filter(msg => !msg.isRead && msg.senderId !== user?.id).length;
+      setChats(res.data || []);
+      const unread = (res.data || []).reduce((total, chat) => {
+        return total + (chat.messages || []).filter(m => !m.isRead && m.senderId !== user?.id).length;
       }, 0);
-      setUnreadCount(totalUnread);
+      setUnreadCount(unread);
     } catch (error) {
-      console.error('Failed to fetch chats', error);
+      console.error('Fetch chats error:', error);
     }
   };
   
   const fetchMessages = async (chatId) => {
     try {
       const res = await api.get(`/chat/${chatId}/messages`);
-      const msgs = (res.data.messages || []).map(msg => ({
-        ...msg,
-        status: msg.seen ? 'seen' : msg.delivered ? 'delivered' : 'sent'
-      }));
-      setMessages(msgs);
-      
-      const unseenMessages = msgs.filter(msg => !msg.seen && msg.senderId !== user.id);
-      unseenMessages.forEach(msg => {
-        socket?.emit('message:seen', { messageId: msg.id, to: msg.senderId });
-      });
-      
-      setTimeout(() => scrollToBottom(), 100);
+      setMessages(res.data.messages || []);
+      scrollToBottom();
     } catch (error) {
-      console.error('Failed to fetch messages', error);
+      console.error('Fetch messages error:', error);
     }
   };
   
@@ -363,18 +245,18 @@ const Messages = () => {
   const handleScroll = () => {
     if (messagesContainerRef.current) {
       const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
-      setShowScrollButton(scrollHeight - scrollTop - clientHeight > 100);
+      setShowScrollButton(scrollHeight - scrollTop - clientHeight > 200);
     }
   };
   
   const handleTyping = (e) => {
     setInput(e.target.value);
-    const otherUser = getOtherParticipant();
-    if (socket && otherUser) {
-      socket.emit('typing:start', { receiverId: otherUser.id });
+    const other = getOtherParticipant();
+    if (socket && other) {
+      socket.emit('typing:start', { receiverId: other.id });
       clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = setTimeout(() => {
-        socket.emit('typing:stop', { receiverId: otherUser.id });
+        socket.emit('typing:stop', { receiverId: other.id });
       }, 1500);
     }
   };
@@ -382,47 +264,33 @@ const Messages = () => {
   const handleReaction = async (messageId, reaction) => {
     try {
       await api.post(`/chat/messages/${messageId}/react`, { reaction });
-      socket.emit('message:react', { messageId, reaction, to: getOtherParticipant()?.id });
-      setMessages(prev => prev.map(msg => 
-        msg.id === messageId ? { ...msg, reaction } : msg
-      ));
-      toast.success(`Reacted with ${reaction}`);
+      setMessages(prev => prev.map(msg => msg.id === messageId ? { ...msg, reaction } : msg));
+      toast.success(`Reacted ${reaction}`);
     } catch (error) {
-      console.error('Reaction failed:', error);
+      console.error('Reaction error:', error);
     }
     setShowReactionPicker(null);
   };
   
   const sendMessage = async () => {
     if (!input.trim() || !selectedChat || sending) return;
-    const otherUser = getOtherParticipant();
+    const other = getOtherParticipant();
     setSending(true);
     try {
-      const payload = { 
-        chatId: selectedChat.id, 
-        content: input, 
-        receiverId: otherUser?.id 
-      };
+      const payload = { chatId: selectedChat.id, content: input, receiverId: other?.id };
       if (replyingTo) payload.replyToId = replyingTo.id;
       
       const res = await api.post('/chat/messages', payload);
-      const newMessage = { ...res.data, status: 'sent' };
-      setMessages(prev => [...prev, newMessage]);
+      setMessages(prev => [...prev, res.data]);
       setInput('');
       setReplyingTo(null);
       
-      if (socket && otherUser) {
-        socket.emit('message:send', { receiverId: otherUser.id, message: newMessage });
-        setTimeout(() => {
-          setMessages(prev => prev.map(msg => 
-            msg.id === newMessage.id ? { ...msg, status: 'delivered' } : msg
-          ));
-        }, 500);
+      if (socket && other) {
+        socket.emit('message:send', { receiverId: other.id, message: res.data });
       }
       fetchChats();
       scrollToBottom();
     } catch (error) {
-      console.error('Send error:', error);
       toast.error('Failed to send message');
     } finally {
       setSending(false);
@@ -433,13 +301,11 @@ const Messages = () => {
     if (!editingMessage || !input.trim()) return;
     try {
       const res = await api.put(`/chat/messages/${editingMessage.id}`, { content: input });
-      const updatedMessage = res.data;
-      setMessages(prev => prev.map(msg => msg.id === editingMessage.id ? updatedMessage : msg));
+      setMessages(prev => prev.map(msg => msg.id === editingMessage.id ? res.data : msg));
       setInput('');
       setEditingMessage(null);
       toast.success('Message edited');
     } catch (error) {
-      console.error('Edit error:', error);
       toast.error('Failed to edit message');
     }
   };
@@ -453,54 +319,44 @@ const Messages = () => {
       setSelectedMessage(null);
       toast.success('Message deleted');
     } catch (error) {
-      console.error('Delete error:', error);
       toast.error('Failed to delete message');
     }
   };
   
   const handleReplyClick = (message) => {
     setReplyingTo(message);
-    setSelectedMessage(null);
     document.querySelector('textarea')?.focus();
   };
   
   const handleEditClick = (message) => {
     setEditingMessage(message);
     setInput(message.content);
-    setSelectedMessage(null);
     document.querySelector('textarea')?.focus();
   };
   
   const handleFileUpload = async (file) => {
-    if (!selectedChat) {
-      toast.error('No chat selected');
-      return;
-    }
+    if (!selectedChat) return toast.error('No chat selected');
     setUploading(true);
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const result = await api.post('/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
-      const otherUser = getOtherParticipant();
-      const res = await api.post('/chat/messages', { 
-        chatId: selectedChat.id, 
-        content: '', 
-        receiverId: otherUser?.id,
+      const result = await api.post('/upload', formData);
+      const other = getOtherParticipant();
+      const res = await api.post('/chat/messages', {
+        chatId: selectedChat.id,
+        content: '',
+        receiverId: other?.id,
         fileUrl: result.data.url,
-        fileType: file.type,
-        fileName: file.name
+        fileType: file.type
       });
-      setMessages(prev => [...prev, { ...res.data, status: 'sent' }]);
-      if (socket && otherUser) {
-        socket.emit('message:send', { receiverId: otherUser.id, message: res.data });
+      setMessages(prev => [...prev, res.data]);
+      if (socket && other) {
+        socket.emit('message:send', { receiverId: other.id, message: res.data });
       }
       scrollToBottom();
       toast.success('Sent');
     } catch (error) {
-      console.error('Upload error:', error);
-      toast.error('Failed to upload');
+      toast.error('Upload failed');
     } finally {
       setUploading(false);
     }
@@ -511,19 +367,16 @@ const Messages = () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
       const chunks = [];
-      
-      recorder.ondataavailable = (event) => chunks.push(event.data);
+      recorder.ondataavailable = (e) => chunks.push(e.data);
       recorder.onstop = async () => {
-        const audioBlob = new Blob(chunks, { type: 'audio/webm' });
-        const file = new File([audioBlob], `voice-${Date.now()}.webm`, { type: 'audio/webm' });
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const file = new File([blob], `voice-${Date.now()}.webm`);
         await handleFileUpload(file);
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach(t => t.stop());
       };
-      
       recorder.start();
       setMediaRecorder(recorder);
       setIsRecording(true);
-      
       setTimeout(() => {
         if (recorder.state === 'recording') {
           recorder.stop();
@@ -531,7 +384,7 @@ const Messages = () => {
         }
       }, 30000);
     } catch (error) {
-      toast.error('Please allow microphone access');
+      toast.error('Microphone access needed');
     }
   };
   
@@ -556,10 +409,9 @@ const Messages = () => {
     }
     try {
       const res = await api.get('/chat/search', { params: { q: query } });
-      const filteredResults = (res.data || []).filter(user => user.fullName && user.fullName !== 'Unknown');
-      setSearchResults(filteredResults);
+      setSearchResults(res.data || []);
     } catch (error) {
-      console.error('Search failed', error);
+      console.error('Search error:', error);
     }
   };
   
@@ -591,61 +443,41 @@ const Messages = () => {
     setEditingMessage(null);
   };
   
-  // Video Call Functions - FIXED with proper WebRTC
+  // Video Call
   const initiateCall = async (isVideo = true) => {
-    const otherUser = getOtherParticipant();
-    if (!otherUser) {
-      toast.error('User not found');
-      return;
-    }
+    const other = getOtherParticipant();
+    if (!other) return toast.error('User not found');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: isVideo, audio: true });
       setLocalStream(stream);
       if (videoRef.current) videoRef.current.srcObject = stream;
       
       const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-        ]
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       });
       setPeerConnection(pc);
       
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
       
       pc.ontrack = (event) => {
-        console.log('Received remote track');
         setRemoteStream(event.streams[0]);
         if (remoteVideoRef.current) remoteVideoRef.current.srcObject = event.streams[0];
       };
       
       pc.onicecandidate = (event) => {
         if (event.candidate) {
-          console.log('Sending ICE candidate');
-          socket.emit('call:webrtc:signal', { signal: event.candidate, to: otherUser.id });
-        }
-      };
-      
-      pc.oniceconnectionstatechange = () => {
-        console.log('ICE connection state:', pc.iceConnectionState);
-        if (pc.iceConnectionState === 'failed') {
-          toast.error('Connection failed');
-          endCall();
+          socket.emit('call:ice-candidate', { candidate: event.candidate, to: other.id });
         }
       };
       
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       
-      socket.emit('call:webrtc:signal', { signal: offer, to: otherUser.id });
-      socket.emit('call:start', { to: otherUser.id, from: user.id, fromName: user.fullName, isVideo });
-      
+      socket.emit('call:offer', { to: other.id, fromName: user.fullName, offer, isVideo });
       setIsCalling(true);
-      toast.success(`Calling ${otherUser.fullName}...`);
+      toast.success(`Calling ${other.fullName}...`);
     } catch (err) {
-      console.error('Call error:', err);
-      toast.error('Please grant camera/microphone permissions');
+      toast.error('Camera/Microphone access needed');
     }
   };
   
@@ -656,43 +488,33 @@ const Messages = () => {
       window.currentRingtone = null;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: incomingCall.isVideo, 
-        audio: true 
-      });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: incomingCall.isVideo, audio: true });
       setLocalStream(stream);
       if (videoRef.current) videoRef.current.srcObject = stream;
       
       const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-        ]
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       });
       setPeerConnection(pc);
       
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
       
       pc.ontrack = (event) => {
-        console.log('Received remote track');
         setRemoteStream(event.streams[0]);
         if (remoteVideoRef.current) remoteVideoRef.current.srcObject = event.streams[0];
       };
       
       pc.onicecandidate = (event) => {
         if (event.candidate) {
-          console.log('Sending ICE candidate');
-          socket.emit('call:webrtc:signal', { signal: event.candidate, to: incomingCall.fromId });
+          socket.emit('call:ice-candidate', { candidate: event.candidate, to: incomingCall.fromId });
         }
       };
       
-      pc.oniceconnectionstatechange = () => {
-        console.log('ICE connection state:', pc.iceConnectionState);
-      };
+      await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
       
-      socket.emit('call:accept', { to: incomingCall.fromId, from: user.id });
-      
+      socket.emit('call:answer', { to: incomingCall.fromId, answer });
       setIsCallActive(true);
       setIncomingCall(null);
       toast.success('Call connected');
@@ -703,7 +525,6 @@ const Messages = () => {
         setCallDuration(seconds);
       }, 1000);
     } catch (err) {
-      console.error('Accept call error:', err);
       toast.error('Failed to accept call');
     }
   };
@@ -723,12 +544,11 @@ const Messages = () => {
   const endCall = () => {
     if (callTimerRef.current) clearInterval(callTimerRef.current);
     if (peerConnection) peerConnection.close();
-    if (localStream) localStream.getTracks().forEach(track => track.stop());
-    if (remoteStream) remoteStream.getTracks().forEach(track => track.stop());
+    if (localStream) localStream.getTracks().forEach(t => t.stop());
+    if (remoteStream) remoteStream.getTracks().forEach(t => t.stop());
     setIsCallActive(false);
     setIsCalling(false);
     setCallDuration(0);
-    
     if (selectedChat && getOtherParticipant()) {
       socket.emit('call:end', { to: getOtherParticipant().id });
     }
@@ -736,14 +556,14 @@ const Messages = () => {
   
   const toggleMute = () => {
     if (localStream) {
-      localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
+      localStream.getAudioTracks().forEach(t => t.enabled = !t.enabled);
       setIsMuted(!isMuted);
     }
   };
   
   const toggleVideo = () => {
     if (localStream) {
-      localStream.getVideoTracks().forEach(track => track.enabled = !track.enabled);
+      localStream.getVideoTracks().forEach(t => t.enabled = !t.enabled);
       setIsVideoOff(!isVideoOff);
     }
   };
@@ -756,9 +576,8 @@ const Messages = () => {
   
   const MessageStatus = ({ message, isOwn }) => {
     if (!isOwn) return null;
-    if (message.status === 'seen') return <FaCheckDouble className="text-blue-500 text-xs" title="Seen" />;
-    if (message.status === 'delivered') return <FaCheckDouble className="text-gray-400 text-xs" title="Delivered" />;
-    return <FaCheck className="text-gray-400 text-xs" title="Sent" />;
+    if (message.isRead) return <FaCheckDouble className="text-blue-500 text-xs" />;
+    return <FaCheck className="text-gray-400 text-xs" />;
   };
   
   const AudioPlayer = ({ audioUrl, messageId }) => {
@@ -768,26 +587,25 @@ const Messages = () => {
     const audioRef = useRef(null);
     
     useEffect(() => {
-      const audio = audioRef.current;
-      if (!audio) return;
-      audio.addEventListener('loadedmetadata', () => setDuration(audio.duration));
-      audio.addEventListener('timeupdate', () => setProgress((audio.currentTime / audio.duration) * 100));
-      audio.addEventListener('ended', () => {
-        setIsPlaying(false);
-        setProgress(0);
-        setPlayingAudioId(null);
-      });
-      return () => {
-        audio.removeEventListener('loadedmetadata', () => {});
-        audio.removeEventListener('timeupdate', () => {});
-        audio.removeEventListener('ended', () => {});
-      };
+      if (audioRef.current) {
+        audioRef.current.addEventListener('loadedmetadata', () => setDuration(audioRef.current.duration));
+        audioRef.current.addEventListener('timeupdate', () => {
+          setProgress((audioRef.current.currentTime / audioRef.current.duration) * 100);
+        });
+        audioRef.current.addEventListener('ended', () => {
+          setIsPlaying(false);
+          setProgress(0);
+          setPlayingAudioId(null);
+        });
+      }
     }, []);
     
     const togglePlay = () => {
       if (playingAudioId && playingAudioId !== messageId) {
-        const prev = audioRefs.current[playingAudioId];
-        if (prev) { prev.pause(); prev.currentTime = 0; }
+        if (audioRefs.current[playingAudioId]) {
+          audioRefs.current[playingAudioId].pause();
+          audioRefs.current[playingAudioId].currentTime = 0;
+        }
       }
       if (isPlaying) {
         audioRef.current.pause();
@@ -801,19 +619,23 @@ const Messages = () => {
     };
     
     return (
-      <div className="flex items-center space-x-3 mt-1 min-w-[220px]">
-        <button onClick={togglePlay} className="w-10 h-10 rounded-full bg-green-500 hover:bg-green-600 flex items-center justify-center">
-          {isPlaying ? <FaPause size={16} className="text-white" /> : <FaPlay size={16} className="text-white ml-0.5" />}
+      <div className="flex items-center space-x-2 min-w-[200px]">
+        <button onClick={togglePlay} className="w-8 h-8 rounded-full bg-green-500 hover:bg-green-600 flex items-center justify-center">
+          {isPlaying ? <FaPause size={12} className="text-white" /> : <FaPlay size={12} className="text-white ml-0.5" />}
         </button>
-        <div className="flex-1"><div className="h-1.5 bg-gray-300 rounded-full overflow-hidden"><div className="h-full bg-green-500 rounded-full transition-all duration-100" style={{ width: `${progress}%` }} /></div></div>
+        <div className="flex-1">
+          <div className="h-1 bg-gray-300 rounded-full overflow-hidden">
+            <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${progress}%` }} />
+          </div>
+        </div>
         <span className="text-xs text-gray-500 min-w-[40px]">{duration ? `${Math.floor(duration)}s` : '0:00'}</span>
-        <audio ref={audioRef} src={audioUrl} preload="metadata" />
+        <audio ref={audioRef} src={audioUrl} />
       </div>
     );
   };
   
   const getInitials = (name) => {
-    if (!name || name === 'Unknown') return '?';
+    if (!name) return '?';
     return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   };
   
@@ -821,38 +643,42 @@ const Messages = () => {
   
   return (
     <>
-      <div className="flex h-[calc(100vh-4rem)] bg-gray-50 overflow-hidden dark:bg-gray-900">
-        {/* Chat List */}
-        <div className={`${isMobile && showChatArea ? 'hidden' : 'flex'} flex-col w-full md:w-80 bg-white border-r shadow-sm h-full overflow-hidden dark:bg-gray-800 dark:border-gray-700`}>
-          <div className="p-4 border-b bg-white sticky top-0 z-10 dark:bg-gray-800 dark:border-gray-700">
-            <div className="flex justify-between items-center mb-3">
-              <h2 className="text-xl font-bold text-gray-800 dark:text-white">Messages</h2>
+      <div className="flex h-[calc(100vh-4rem)] bg-gray-100 dark:bg-gray-900">
+        {/* Chat List Sidebar */}
+        <div className={`${isMobile && showChatArea ? 'hidden' : 'flex'} flex-col w-full md:w-96 bg-white dark:bg-gray-800 border-r dark:border-gray-700 h-full`}>
+          <div className="p-4 border-b dark:border-gray-700">
+            <div className="flex justify-between items-center">
+              <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Chats</h1>
               <button onClick={() => setShowSearch(!showSearch)} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
-                <FaUserPlus className="text-green-600 dark:text-green-400" size={18} />
+                <FaUserPlus className="text-green-500" size={20} />
               </button>
             </div>
             {showSearch && (
-              <div className="mb-3">
+              <div className="mt-3">
                 <div className="relative">
-                  <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={14} />
-                  <input 
-                    type="text" 
-                    placeholder="Search users..." 
-                    value={searchQuery} 
-                    onChange={(e) => { setSearchQuery(e.target.value); searchUsers(e.target.value); }} 
-                    className="w-full pl-10 pr-4 py-2 border rounded-xl focus:ring-2 focus:ring-green-500 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white" 
+                  <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
+                  <input
+                    type="text"
+                    placeholder="Search users..."
+                    value={searchQuery}
+                    onChange={(e) => { setSearchQuery(e.target.value); searchUsers(e.target.value); }}
+                    className="w-full pl-10 pr-4 py-2 border rounded-full focus:ring-2 focus:ring-green-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                   />
                 </div>
                 {searchResults.length > 0 && (
-                  <div className="absolute bg-white border rounded-xl shadow-lg mt-1 left-4 right-4 z-10 max-h-60 overflow-y-auto dark:bg-gray-800 dark:border-gray-700">
-                    {searchResults.map(result => (
-                      <button key={result.id} onClick={() => startChat(result.id)} className="w-full text-left px-4 py-3 hover:bg-gray-50 flex items-center space-x-3 border-b dark:hover:bg-gray-700 dark:border-gray-700">
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-r from-green-500 to-green-700 flex items-center justify-center text-white font-bold text-sm">
-                          {getInitials(result.fullName)}
+                  <div className="absolute mt-1 w-80 bg-white dark:bg-gray-800 rounded-xl shadow-lg border dark:border-gray-700 z-10">
+                    {searchResults.map(user => (
+                      <button
+                        key={user.id}
+                        onClick={() => startChat(user.id)}
+                        className="w-full flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-700 transition"
+                      >
+                        <div className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center text-white font-bold">
+                          {getInitials(user.fullName)}
                         </div>
-                        <div>
-                          <p className="font-semibold text-gray-800 dark:text-white">{result.fullName}</p>
-                          <p className="text-xs text-gray-500 dark:text-gray-400">{result.role}</p>
+                        <div className="flex-1 text-left">
+                          <p className="font-semibold text-gray-800 dark:text-white">{user.fullName}</p>
+                          <p className="text-xs text-gray-500">{user.role}</p>
                         </div>
                       </button>
                     ))}
@@ -861,51 +687,50 @@ const Messages = () => {
               </div>
             )}
           </div>
+          
           <div className="flex-1 overflow-y-auto">
             {chats.length === 0 ? (
-              <div className="text-center py-12 text-gray-400 dark:text-gray-500">
-                <FaComment className="text-5xl mx-auto mb-3 opacity-50" />
-                <p className="text-sm">No messages yet</p>
-                <button onClick={() => setShowSearch(true)} className="block mx-auto mt-3 text-green-600 dark:text-green-400 text-sm font-medium hover:underline">
+              <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                <FaComment size={48} className="mb-3 opacity-50" />
+                <p>No chats yet</p>
+                <button onClick={() => setShowSearch(true)} className="mt-3 text-green-500 text-sm font-medium">
                   Start a conversation
                 </button>
               </div>
             ) : (
               chats.map(chat => {
-                const other = !chat.isGroup ? chat.participants?.find(p => p.userId !== user.id)?.user : null;
-                const lastMessage = chat.messages?.[0];
+                const other = chat.participants?.find(p => p.userId !== user.id)?.user;
+                const lastMsg = chat.messages?.[0];
+                const unread = chat.messages?.filter(m => !m.isRead && m.senderId !== user.id).length || 0;
                 const isActive = selectedChat?.id === chat.id;
                 
-                if (!other || !other.fullName || other.fullName === 'Unknown') return null;
-                
-                let lastMessageText = 'No messages yet';
-                if (lastMessage?.content) lastMessageText = lastMessage.content;
-                else if (lastMessage?.fileType?.startsWith('audio/')) lastMessageText = '🎤 Voice message';
-                else if (lastMessage?.fileType?.startsWith('video/')) lastMessageText = '📹 Video';
-                else if (lastMessage?.fileType?.startsWith('image/')) lastMessageText = '📷 Photo';
-                
                 return (
-                  <button 
-                    key={chat.id} 
-                    onClick={() => selectChat(chat)} 
-                    className={`w-full text-left p-4 hover:bg-gray-50 transition border-b dark:hover:bg-gray-700 dark:border-gray-700 ${isActive && !isMobile ? 'bg-green-50 border-l-4 border-l-green-600 dark:bg-green-900/20' : ''}`}
+                  <button
+                    key={chat.id}
+                    onClick={() => selectChat(chat)}
+                    className={`w-full flex items-center gap-3 p-4 hover:bg-gray-50 dark:hover:bg-gray-700 transition border-b dark:border-gray-700 ${isActive && !isMobile ? 'bg-green-50 dark:bg-green-900/20' : ''}`}
                   >
-                    <div className="flex items-center space-x-3">
-                      <div className="w-12 h-12 rounded-full bg-gradient-to-r from-green-500 to-green-700 flex items-center justify-center text-white font-bold shadow-sm">
-                        {getInitials(other?.fullName)}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex justify-between items-baseline">
-                          <p className="font-semibold text-gray-800 truncate dark:text-white">{other?.fullName}</p>
-                          {lastMessage && (
-                            <span className="text-xs text-gray-400 flex-shrink-0 ml-2">
-                              {new Date(lastMessage.createdAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-sm text-gray-500 truncate dark:text-gray-400">{lastMessageText}</p>
-                      </div>
+                    <div className="w-12 h-12 rounded-full bg-gradient-to-r from-green-500 to-green-600 flex items-center justify-center text-white font-bold shadow-sm">
+                      {getInitials(other?.fullName)}
                     </div>
+                    <div className="flex-1 text-left min-w-0">
+                      <div className="flex justify-between items-baseline">
+                        <p className="font-semibold text-gray-800 dark:text-white truncate">{other?.fullName}</p>
+                        {lastMsg && (
+                          <span className="text-xs text-gray-400 flex-shrink-0 ml-2">
+                            {new Date(lastMsg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm text-gray-500 dark:text-gray-400 truncate">
+                        {lastMsg?.content || (lastMsg?.fileType?.startsWith('audio/') ? '🎤 Voice message' : lastMsg?.fileType?.startsWith('video/') ? '📹 Video' : lastMsg?.fileType?.startsWith('image/') ? '📷 Photo' : 'No messages yet')}
+                      </p>
+                    </div>
+                    {unread > 0 && (
+                      <span className="bg-green-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                        {unread}
+                      </span>
+                    )}
                   </button>
                 );
               })
@@ -914,43 +739,44 @@ const Messages = () => {
         </div>
         
         {/* Chat Area */}
-        <div className={`${isMobile && !showChatArea ? 'hidden' : 'flex'} flex-1 flex-col bg-gray-50 relative h-full overflow-hidden dark:bg-gray-900`}>
+        <div className={`${isMobile && !showChatArea ? 'hidden' : 'flex'} flex-1 flex-col bg-gray-50 dark:bg-gray-900`}>
           {selectedChat && otherUser ? (
             <>
-              <div className="bg-white border-b px-4 py-3 flex items-center justify-between shadow-sm sticky top-0 z-10 dark:bg-gray-800 dark:border-gray-700">
-                <div className="flex items-center space-x-3">
+              {/* Chat Header */}
+              <div className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 px-4 py-3 flex items-center justify-between shadow-sm">
+                <div className="flex items-center gap-3">
                   {isMobile && (
-                    <button onClick={goBackToChatList} className="p-2 rounded-full hover:bg-gray-100 mr-2 dark:hover:bg-gray-700">
-                      <FaArrowLeft size={18} className="text-gray-600 dark:text-gray-400" />
+                    <button onClick={goBackToChatList} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full">
+                      <FaArrowLeft size={20} className="text-gray-600 dark:text-gray-400" />
                     </button>
                   )}
-                  <div className="flex items-center space-x-3">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-r from-green-500 to-green-700 flex items-center justify-center text-white font-bold text-sm shadow-sm">
-                      {getInitials(otherUser.fullName)}
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-gray-800 text-sm md:text-base dark:text-white">
-                        {otherUser.fullName}
-                      </h3>
-                      <p className="text-xs">
-                        {isTyping ? <span className="text-green-600 animate-pulse">Typing...</span> : <span className="text-gray-500 dark:text-gray-400">{otherUser.role}</span>}
-                      </p>
-                    </div>
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-r from-green-500 to-green-600 flex items-center justify-center text-white font-bold">
+                    {getInitials(otherUser.fullName)}
+                  </div>
+                  <div>
+                    <h2 className="font-semibold text-gray-800 dark:text-white">{otherUser.fullName}</h2>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {isTyping ? <span className="text-green-500">Typing...</span> : otherUser.role}
+                    </p>
                   </div>
                 </div>
-                <button onClick={() => initiateCall(true)} disabled={isCalling || isCallActive} className="p-2 rounded-full hover:bg-gray-100 text-gray-500 hover:text-green-600 disabled:opacity-50 dark:hover:bg-gray-700">
-                  <FaVideoCall size={18} />
+                <button
+                  onClick={() => initiateCall(true)}
+                  disabled={isCalling || isCallActive}
+                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full text-gray-500 hover:text-green-500"
+                >
+                  <FaVideoCall size={20} />
                 </button>
               </div>
               
               {/* Reply Preview */}
               {replyingTo && (
-                <div className="bg-gray-100 px-4 py-2 border-l-4 border-green-500 flex justify-between items-center dark:bg-gray-800">
+                <div className="bg-gray-100 dark:bg-gray-800 px-4 py-2 border-l-4 border-green-500 flex justify-between items-center">
                   <div className="flex-1">
                     <p className="text-xs text-green-600 font-semibold">Replying to</p>
-                    <p className="text-sm text-gray-600 truncate dark:text-gray-400">{replyingTo.content || 'Media'}</p>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 truncate">{replyingTo.content || 'Media'}</p>
                   </div>
-                  <button onClick={() => setReplyingTo(null)} className="p-1 hover:bg-gray-200 rounded-full dark:hover:bg-gray-700">
+                  <button onClick={() => setReplyingTo(null)} className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full">
                     <FaTimes size={12} className="text-gray-500" />
                   </button>
                 </div>
@@ -958,130 +784,118 @@ const Messages = () => {
               
               {/* Edit Preview */}
               {editingMessage && (
-                <div className="bg-gray-100 px-4 py-2 border-l-4 border-blue-500 flex justify-between items-center dark:bg-gray-800">
+                <div className="bg-gray-100 dark:bg-gray-800 px-4 py-2 border-l-4 border-blue-500 flex justify-between items-center">
                   <div className="flex-1">
                     <p className="text-xs text-blue-600 font-semibold">Editing</p>
-                    <p className="text-sm text-gray-600 truncate dark:text-gray-400">{editingMessage.content}</p>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 truncate">{editingMessage.content}</p>
                   </div>
-                  <button onClick={() => { setEditingMessage(null); setInput(''); }} className="p-1 hover:bg-gray-200 rounded-full dark:hover:bg-gray-700">
+                  <button onClick={() => { setEditingMessage(null); setInput(''); }} className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full">
                     <FaTimes size={12} className="text-gray-500" />
                   </button>
                 </div>
               )}
               
-              <div 
-                ref={messagesContainerRef} 
+              {/* Messages Container */}
+              <div
+                ref={messagesContainerRef}
                 onScroll={handleScroll}
-                className="flex-1 overflow-y-auto p-3 md:p-4 space-y-3"
+                className="flex-1 overflow-y-auto p-4 space-y-3"
               >
                 {messages.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full text-gray-400 dark:text-gray-500">
-                    <FaComment className="text-5xl mb-3 opacity-30" />
-                    <p className="text-center text-sm">No messages yet</p>
-                    <p className="text-xs">Send a message to start</p>
+                  <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                    <FaComment size={48} className="mb-3 opacity-30" />
+                    <p>No messages yet</p>
+                    <p className="text-sm">Send a message to start the conversation</p>
                   </div>
                 ) : (
-                  messages.map((message) => {
-                    const isOwn = message.senderId === user.id;
-                    const isAudio = message.fileType?.startsWith('audio/');
-                    const isVideo = message.fileType?.startsWith('video/');
-                    const isImage = message.fileType?.startsWith('image/');
-                    const repliedTo = message.replyToId ? messages.find(m => m.id === message.replyToId) : null;
-                    const isSwiped = swipedMessageId === message.id;
+                  messages.map((msg) => {
+                    const isOwn = msg.senderId === user.id;
+                    const isAudio = msg.fileType?.startsWith('audio/');
+                    const isVideo = msg.fileType?.startsWith('video/');
+                    const isImage = msg.fileType?.startsWith('image/');
+                    const repliedTo = msg.replyToId ? messages.find(m => m.id === msg.replyToId) : null;
                     
                     return (
-                      <div 
-                        key={message.id} 
-                        className={`flex ${isOwn ? 'justify-end' : 'justify-start'} message-item group relative transition-all duration-300 ${isSwiped ? 'translate-x-[-60px]' : 'translate-x-0'}`}
+                      <div
+                        key={msg.id}
+                        className={`flex ${isOwn ? 'justify-end' : 'justify-start'} message-item group relative`}
                         onTouchStart={handleTouchStart}
-                        onTouchMove={(e) => handleTouchMove(e, message.id)}
-                        onTouchEnd={() => handleTouchEnd(message)}
+                        onTouchMove={handleTouchMove}
+                        onTouchEnd={() => handleTouchEnd(msg)}
                       >
-                        {/* Swipe Action Buttons */}
-                        {isSwiped && isMobile && (
-                          <div className="absolute left-0 top-0 bottom-0 flex items-center gap-2 px-2">
-                            <button 
-                              onClick={() => handleReplyClick(message)}
-                              className="bg-green-500 text-white p-3 rounded-full shadow-lg active:scale-95 transition"
-                            >
-                              <FaReply size={20} />
-                            </button>
-                            {isOwn && (
-                              <button 
-                                onClick={() => { setSelectedMessage(message); setShowDeleteConfirm(true); }}
-                                className="bg-red-500 text-white p-3 rounded-full shadow-lg active:scale-95 transition"
-                              >
-                                <FaTrash size={20} />
-                              </button>
-                            )}
-                          </div>
-                        )}
-                        
-                        <div className={`max-w-[75%] px-4 py-2 rounded-2xl relative ${
-                          isOwn ? 'bg-green-600 text-white rounded-br-sm' : 'bg-white text-gray-800 shadow-sm rounded-bl-sm dark:bg-gray-800 dark:text-white'
-                        }`}>
+                        <div
+                          className={`max-w-[75%] px-4 py-2 rounded-2xl relative ${
+                            isOwn
+                              ? 'bg-green-500 text-white rounded-br-sm'
+                              : 'bg-white dark:bg-gray-800 text-gray-800 dark:text-white shadow-md rounded-bl-sm'
+                          }`}
+                        >
                           {repliedTo && (
-                            <div className={`text-xs mb-1 p-1 rounded ${isOwn ? 'bg-green-700' : 'bg-gray-100 dark:bg-gray-700'} opacity-75`}>
-                              <p className="font-semibold">↳ {repliedTo.senderId === user.id ? 'You' : (repliedTo.sender?.fullName || 'User')}</p>
+                            <div className={`text-xs mb-1 p-1 rounded ${isOwn ? 'bg-green-600' : 'bg-gray-100 dark:bg-gray-700'} opacity-75`}>
+                              <p className="font-semibold">↳ {repliedTo.senderId === user.id ? 'You' : repliedTo.sender?.fullName}</p>
                               <p className="truncate">{repliedTo.content || 'Media'}</p>
                             </div>
                           )}
                           
-                          {message.content && <p className="text-sm break-words">{message.content}</p>}
-                          {message.fileUrl && (
+                          {msg.content && <p className="text-sm break-words">{msg.content}</p>}
+                          
+                          {msg.fileUrl && (
                             <>
                               {isImage && (
-                                <img src={message.fileUrl} alt="" className="max-w-full rounded mt-1 max-h-60 cursor-pointer" onClick={() => window.open(message.fileUrl)} />
+                                <img
+                                  src={msg.fileUrl}
+                                  alt=""
+                                  className="max-w-full rounded mt-1 max-h-60 cursor-pointer"
+                                  onClick={() => window.open(msg.fileUrl)}
+                                />
                               )}
                               {isVideo && (
-                                <video controls className="max-w-full rounded mt-1 max-h-60 w-full" playsInline>
-                                  <source src={message.fileUrl} type={message.fileType} />
+                                <video controls className="max-w-full rounded mt-1 max-h-60">
+                                  <source src={msg.fileUrl} />
                                 </video>
                               )}
-                              {isAudio && (
-                                <AudioPlayer audioUrl={message.fileUrl} messageId={message.id} />
-                              )}
+                              {isAudio && <AudioPlayer audioUrl={msg.fileUrl} messageId={msg.id} />}
                             </>
                           )}
-                          {message.reaction && (
-                            <div className="absolute -top-3 -right-2 text-lg reaction-animation">{message.reaction}</div>
+                          
+                          {msg.reaction && (
+                            <div className="absolute -top-3 -right-2 text-lg">{msg.reaction}</div>
                           )}
-                          <div className="flex items-center justify-end space-x-1 mt-1">
-                            <span className={`text-[10px] ${isOwn ? 'text-green-200' : 'text-gray-400 dark:text-gray-500'}`}>
-                              {new Date(message.createdAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+                          
+                          <div className="flex items-center justify-end gap-1 mt-1">
+                            <span className={`text-[10px] ${isOwn ? 'text-green-200' : 'text-gray-400'}`}>
+                              {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </span>
-                            <MessageStatus message={message} isOwn={isOwn} />
+                            <MessageStatus message={msg} isOwn={isOwn} />
                           </div>
                           
                           {/* Reaction Button */}
                           {!isMobile && (
-                            <button 
-                              onClick={() => setShowReactionPicker(showReactionPicker === message.id ? null : message.id)}
-                              className="absolute left-2 top-1/2 transform -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity"
+                            <button
+                              onClick={() => setShowReactionPicker(showReactionPicker === msg.id ? null : msg.id)}
+                              className="absolute left-2 top-1/2 transform -translate-y-1/2 opacity-0 group-hover:opacity-100 transition"
                             >
                               <FaSmile size={14} className="text-gray-500" />
                             </button>
                           )}
-                          {showReactionPicker === message.id && (
-                            <ReactionPicker 
-                              onSelect={(reaction) => handleReaction(message.id, reaction)} 
-                              onClose={() => setShowReactionPicker(null)}
-                            />
+                          
+                          {showReactionPicker === msg.id && (
+                            <ReactionPicker onSelect={(r) => handleReaction(msg.id, r)} onClose={() => setShowReactionPicker(null)} />
                           )}
                           
-                          {/* Desktop Hover Actions */}
+                          {/* Action Buttons (Desktop) */}
                           {!isMobile && (
-                            <div className="absolute -top-8 right-0 bg-white rounded-full shadow-lg flex space-x-1 p-1 opacity-0 group-hover:opacity-100 transition-opacity z-10 dark:bg-gray-700">
-                              <button onClick={() => handleReplyClick(message)} className="p-1.5 hover:bg-gray-100 rounded-full text-gray-600 dark:hover:bg-gray-600" title="Reply">
-                                <FaReply size={12} />
+                            <div className="absolute -top-8 right-0 bg-white dark:bg-gray-800 rounded-full shadow-lg flex gap-1 p-1 opacity-0 group-hover:opacity-100 transition z-10">
+                              <button onClick={() => handleReplyClick(msg)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full">
+                                <FaReply size={12} className="text-gray-600" />
                               </button>
                               {isOwn && (
                                 <>
-                                  <button onClick={() => handleEditClick(message)} className="p-1.5 hover:bg-gray-100 rounded-full text-gray-600 dark:hover:bg-gray-600" title="Edit">
-                                    <FaEdit size={12} />
+                                  <button onClick={() => handleEditClick(msg)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full">
+                                    <FaEdit size={12} className="text-gray-600" />
                                   </button>
-                                  <button onClick={() => { setSelectedMessage(message); setShowDeleteConfirm(true); }} className="p-1.5 hover:bg-red-100 rounded-full text-red-500" title="Delete">
-                                    <FaTrash size={12} />
+                                  <button onClick={() => { setSelectedMessage(msg); setShowDeleteConfirm(true); }} className="p-1.5 hover:bg-red-100 rounded-full">
+                                    <FaTrash size={12} className="text-red-500" />
                                   </button>
                                 </>
                               )}
@@ -1096,36 +910,57 @@ const Messages = () => {
               </div>
               
               {showScrollButton && (
-                <button onClick={scrollToBottom} className="absolute bottom-20 right-4 bg-green-600 text-white rounded-full p-2 shadow-lg hover:bg-green-700 transition z-10">
+                <button
+                  onClick={scrollToBottom}
+                  className="absolute bottom-20 right-4 bg-green-500 text-white rounded-full p-2 shadow-lg hover:bg-green-600 transition z-10"
+                >
                   <FaArrowDown size={16} />
                 </button>
               )}
               
-              <div className="bg-white border-t px-3 py-2 md:px-4 md:py-3 shadow-sm dark:bg-gray-800 dark:border-gray-700">
-                <div className="flex items-end space-x-2">
-                  <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="p-2 text-gray-500 hover:text-green-600 rounded-full hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-gray-700">
-                    <FaPaperclip size={16} />
+              {/* Message Input */}
+              <div className="bg-white dark:bg-gray-800 border-t dark:border-gray-700 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                    className="p-2 text-gray-500 hover:text-green-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
+                  >
+                    <FaPaperclip size={20} />
                   </button>
-                  <button onClick={isRecording ? stopVoiceRecording : startVoiceRecording} disabled={uploading} className={`p-2 rounded-full transition ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'text-gray-500 hover:text-green-600 hover:bg-gray-100 dark:hover:bg-gray-700'} disabled:opacity-50`}>
-                    {isRecording ? <FaStop size={14} /> : <FaMicrophone size={16} />}
+                  <button
+                    onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
+                    className={`p-2 rounded-full transition ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'text-gray-500 hover:text-green-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                  >
+                    {isRecording ? <FaStop size={16} /> : <FaMicrophone size={20} />}
                   </button>
-                  <input ref={fileInputRef} type="file" accept="image/*,video/*,audio/*" className="hidden" onChange={(e) => { if (e.target.files?.[0]) handleFileUpload(e.target.files[0]); e.target.value = ''; }} />
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*,video/*,audio/*"
+                    className="hidden"
+                    onChange={(e) => { if (e.target.files?.[0]) handleFileUpload(e.target.files[0]); e.target.value = ''; }}
+                  />
                   <div className="flex-1">
-                    <textarea 
-                      value={input} 
-                      onChange={handleTyping} 
-                      onKeyPress={handleKeyPress} 
-                      placeholder={editingMessage ? "Edit..." : replyingTo ? "Reply..." : "Type a message..."} 
-                      rows="1" 
-                      className="w-full px-3 py-2 border border-gray-200 rounded-2xl resize-none focus:ring-2 focus:ring-green-500 text-sm bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-white" 
-                      style={{ maxHeight: '80px' }} 
+                    <textarea
+                      value={input}
+                      onChange={handleTyping}
+                      onKeyPress={handleKeyPress}
+                      placeholder={editingMessage ? "Edit message..." : replyingTo ? "Reply..." : "Type a message..."}
+                      rows="1"
+                      className="w-full px-4 py-2 border dark:border-gray-600 rounded-full resize-none focus:outline-none focus:ring-2 focus:ring-green-500 text-sm bg-gray-50 dark:bg-gray-700 dark:text-white"
+                      style={{ maxHeight: '100px' }}
                     />
                   </div>
-                  <button onClick={editingMessage ? editMessage : sendMessage} disabled={(!input.trim() && !editingMessage) || sending} className="p-2 bg-green-600 text-white rounded-full hover:bg-green-700 disabled:opacity-50 transition shadow-sm">
-                    <FaPaperPlane size={14} />
+                  <button
+                    onClick={editingMessage ? editMessage : sendMessage}
+                    disabled={(!input.trim() && !editingMessage) || sending}
+                    className="p-2 bg-green-500 text-white rounded-full hover:bg-green-600 disabled:opacity-50 transition shadow-md"
+                  >
+                    <FaPaperPlane size={18} />
                   </button>
                 </div>
-                <div className="mt-1 text-[10px] md:text-xs text-gray-400 dark:text-gray-500 flex items-center space-x-3">
+                <div className="mt-1 text-xs text-gray-400 flex gap-3">
                   <span>📎 Attach</span>
                   <span>{isRecording ? '🔴 Recording...' : '🎙️ Voice'}</span>
                   <span>⌨️ Enter to send</span>
@@ -1134,14 +969,12 @@ const Messages = () => {
               </div>
             </>
           ) : (
-            <div className="flex-1 flex items-center justify-center p-4">
-              <div className="text-center text-gray-400 dark:text-gray-500">
-                <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4 dark:bg-gray-800">
-                  <FaComment className="text-3xl text-gray-300" />
-                </div>
-                <p className="text-base font-medium text-gray-500 dark:text-gray-400">No conversation selected</p>
-                <p className="text-xs mt-1">Choose a chat or start a new one</p>
-                <button onClick={() => setShowSearch(true)} className="mt-4 px-4 py-2 bg-green-600 text-white rounded-full text-sm font-medium hover:bg-green-700">
+            <div className="flex-1 flex items-center justify-center">
+              <div className="text-center text-gray-400">
+                <FaComment size={64} className="mx-auto mb-4 opacity-30" />
+                <p className="text-lg font-medium">No conversation selected</p>
+                <p className="text-sm">Choose a chat or start a new one</p>
+                <button onClick={() => setShowSearch(true)} className="mt-4 px-4 py-2 bg-green-500 text-white rounded-full text-sm font-medium hover:bg-green-600">
                   Find Students
                 </button>
               </div>
@@ -1152,15 +985,15 @@ const Messages = () => {
       
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && selectedMessage && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
-          <div className="bg-white rounded-2xl p-6 max-w-sm w-full mx-4 dark:bg-gray-800">
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 max-w-sm w-full mx-4">
             <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-2">Delete Message</h3>
             <p className="text-gray-600 dark:text-gray-400 mb-6">Are you sure you want to delete this message?</p>
             <div className="flex gap-3">
-              <button onClick={() => { setShowDeleteConfirm(false); setSelectedMessage(null); }} className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 font-semibold hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300">
+              <button onClick={() => { setShowDeleteConfirm(false); setSelectedMessage(null); }} className="flex-1 px-4 py-2 border rounded-lg text-gray-700 dark:text-gray-300">
                 Cancel
               </button>
-              <button onClick={deleteMessage} className="flex-1 px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600">
+              <button onClick={deleteMessage} className="flex-1 px-4 py-2 bg-red-500 text-white rounded-lg">
                 Delete
               </button>
             </div>
@@ -1171,16 +1004,16 @@ const Messages = () => {
       {/* Video Call Modal */}
       {isCallActive && (
         <div className="fixed inset-0 bg-black z-50 flex flex-col">
-          <div className="flex-1 relative bg-black">
+          <div className="flex-1 relative">
             <video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover" />
-            <div className="absolute bottom-4 right-4 w-32 h-48 bg-black rounded-lg overflow-hidden shadow-lg border-2 border-white z-10">
+            <div className="absolute bottom-4 right-4 w-32 h-48 bg-black rounded-lg overflow-hidden border-2 border-white">
               <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
             </div>
-            <div className="absolute top-4 left-4 text-white bg-black bg-opacity-50 px-3 py-1 rounded-full text-sm">
+            <div className="absolute top-4 left-4 text-white bg-black/50 px-3 py-1 rounded-full text-sm">
               {otherUser?.fullName} • {formatDuration(callDuration)}
             </div>
           </div>
-          <div className="bg-black bg-opacity-90 p-4 flex justify-center space-x-4">
+          <div className="bg-black/90 p-4 flex justify-center gap-4">
             <button onClick={toggleMute} className={`w-12 h-12 rounded-full flex items-center justify-center ${isMuted ? 'bg-red-500' : 'bg-gray-700'}`}>
               {isMuted ? <FaMicrophoneSlash size={20} className="text-white" /> : <FaMicrophone size={20} className="text-white" />}
             </button>
@@ -1196,20 +1029,20 @@ const Messages = () => {
       
       {/* Incoming Call Modal */}
       {incomingCall && (
-        <div className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center">
-          <div className="bg-white rounded-2xl p-6 max-w-sm w-full mx-4">
+        <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 max-w-sm w-full mx-4">
             <div className="text-center">
               <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <FaPhoneAlt className="text-green-600 text-3xl animate-bounce" />
+                <FaPhoneAlt className="text-green-500 text-3xl animate-bounce" />
               </div>
-              <h3 className="text-xl font-bold text-gray-800 mb-2">Incoming Call</h3>
-              <p className="text-gray-600 mb-1 text-lg font-semibold">{incomingCall.fromName}</p>
-              <p className="text-sm text-gray-500 mb-6">{incomingCall.isVideo ? 'Video call' : 'Voice call'}...</p>
+              <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-2">Incoming Call</h3>
+              <p className="text-gray-600 dark:text-gray-400 mb-1 text-lg font-semibold">{incomingCall.fromName}</p>
+              <p className="text-sm text-gray-500 mb-6">{incomingCall.isVideo ? 'Video call' : 'Voice call'}</p>
               <div className="flex gap-4 justify-center">
-                <button onClick={acceptCall} className="px-8 py-3 bg-green-500 text-white rounded-full font-semibold hover:bg-green-600 flex items-center gap-2">
+                <button onClick={acceptCall} className="px-6 py-2 bg-green-500 text-white rounded-full font-semibold flex items-center gap-2">
                   <FaPhone size={16} /> Accept
                 </button>
-                <button onClick={declineCall} className="px-8 py-3 bg-red-500 text-white rounded-full font-semibold hover:bg-red-600 flex items-center gap-2">
+                <button onClick={declineCall} className="px-6 py-2 bg-red-500 text-white rounded-full font-semibold flex items-center gap-2">
                   <FaPhoneSlash size={16} /> Decline
                 </button>
               </div>
