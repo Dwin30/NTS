@@ -422,6 +422,170 @@ app.get('/api/dashboard/stats', authenticate, async (req, res) => {
   res.json({ students, trainers, posts, internships });
 });
 
+// ============ MISSING POST ROUTES ============
+
+// Create a new post (POST /api/posts)
+app.post('/api/posts', authenticate, async (req, res) => {
+  const { content, imageUrl } = req.body;
+  if (!content || content.trim() === '') {
+    return res.status(400).json({ error: 'Content is required' });
+  }
+  try {
+    const post = await prisma.post.create({
+      data: {
+        content: content.trim(),
+        imageUrl: imageUrl || null,
+        authorId: req.user.id,
+      },
+      include: {
+        author: { select: { id: true, fullName: true, avatar: true, role: true } }
+      }
+    });
+    // Update user's post count
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { postsCount: { increment: 1 } }
+    });
+    // Emit new post via Socket.IO
+    const newPostForSocket = { ...post, isLiked: false, likesCount: 0, commentsCount: 0 };
+    io.emit('post:created', newPostForSocket);
+    res.status(201).json(newPostForSocket);
+  } catch (error) {
+    console.error('Create post error:', error);
+    res.status(500).json({ error: 'Failed to create post' });
+  }
+});
+
+// Get comments for a specific post (GET /api/posts/:postId/comments)
+app.get('/api/posts/:postId/comments', authenticate, async (req, res) => {
+  const { postId } = req.params;
+  try {
+    const comments = await prisma.comment.findMany({
+      where: { postId, isDeleted: false },
+      include: {
+        author: { select: { id: true, fullName: true, avatar: true } }
+      },
+      orderBy: { createdAt: 'asc' }
+    });
+    res.json(comments);
+  } catch (error) {
+    console.error('Fetch comments error:', error);
+    res.status(500).json({ error: 'Failed to fetch comments' });
+  }
+});
+
+// Add a comment to a post (POST /api/posts/:postId/comments)
+app.post('/api/posts/:postId/comments', authenticate, async (req, res) => {
+  const { postId } = req.params;
+  const { content } = req.body;
+  if (!content || content.trim() === '') {
+    return res.status(400).json({ error: 'Comment content is required' });
+  }
+  try {
+    const comment = await prisma.comment.create({
+      data: {
+        content: content.trim(),
+        authorId: req.user.id,
+        postId: postId,
+      },
+      include: {
+        author: { select: { id: true, fullName: true, avatar: true } }
+      }
+    });
+    // Update post's comment count
+    await prisma.post.update({
+      where: { id: postId },
+      data: { commentsCount: { increment: 1 } }
+    });
+    io.emit('comment:added', { postId, comment });
+    res.status(201).json(comment);
+  } catch (error) {
+    console.error('Add comment error:', error);
+    res.status(500).json({ error: 'Failed to add comment' });
+  }
+});
+
+// ============ MISSING PROFILE & SUGGESTED USERS ROUTES ============
+
+// Get a user's profile by ID
+app.get('/api/users/profile/:userId', authenticate, async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const userProfile = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        role: true,
+        avatar: true,
+        bio: true,
+        phone: true,
+        school: true,
+        postsCount: true,
+        followersCount: true,
+        followingCount: true,
+        createdAt: true
+      }
+    });
+    if (!userProfile) return res.status(404).json({ error: 'User not found' });
+    res.json(userProfile);
+  } catch (error) {
+    console.error('Fetch profile error:', error);
+    res.status(500).json({ error: 'Failed to fetch profile' });
+  }
+});
+
+// Update user's own profile
+app.put('/api/users/profile', authenticate, async (req, res) => {
+  const { fullName, bio, phone, school, avatar } = req.body;
+  try {
+    const updatedUser = await prisma.user.update({
+      where: { id: req.user.id },
+      data: { fullName, bio, phone, school, avatar }
+    });
+    res.json(updatedUser);
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({ error: 'Failed to update profile' });
+  }
+});
+
+// Get suggested users to follow
+app.get('/api/users/suggested', authenticate, async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      where: { id: { not: req.user.id } },
+      select: { id: true, fullName: true, avatar: true, role: true },
+      take: 10
+    });
+    res.json(users);
+  } catch (error) {
+    console.error('Fetch suggested users error:', error);
+    res.status(500).json({ error: 'Failed to fetch suggestions' });
+  }
+});
+
+// ============ MISSING CHANGE PASSWORD ROUTE ============
+app.post('/api/auth/change-password', authenticate, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!isValid) return res.status(400).json({ error: 'Current password is incorrect' });
+    
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { passwordHash: hashedPassword }
+    });
+    res.json({ message: 'Password changed successfully' });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ error: 'Failed to change password' });
+  }
+});
+
 // ============ SOCKET.IO ============
 const onlineUsers = new Map();
 

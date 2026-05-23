@@ -1,23 +1,26 @@
 import axios from 'axios';
 
-// Use environment variable or default to Render backend
 const API_URL = process.env.REACT_APP_API_URL || 'https://nts-backend-409a.onrender.com/api';
 
 const api = axios.create({
   baseURL: API_URL,
-  headers: { 'Content-Type': 'application/json' }
+  headers: { 'Content-Type': 'application/json' },
+  withCredentials: true, // Important for CORS with credentials
 });
 
-// Add token to every request
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
+// Request Interceptor: This is the key part that adds the token.
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
 
-// Handle response errors
+// Response Interceptor: Handles common errors like 401.
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -37,8 +40,7 @@ export const uploadFile = async (file, onProgress) => {
     headers: { 'Content-Type': 'multipart/form-data' },
     onUploadProgress: (progressEvent) => {
       if (onProgress && progressEvent.total) {
-        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-        onProgress(percentCompleted);
+        onProgress(Math.round((progressEvent.loaded * 100) / progressEvent.total));
       }
     }
   });
