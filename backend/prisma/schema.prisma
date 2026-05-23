@@ -18,6 +18,9 @@ model User {
   bio       String?
   phone     String?
   school    String?
+  postsCount Int     @default(0)
+  followersCount Int @default(0)
+  followingCount Int @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   
@@ -27,6 +30,20 @@ model User {
   sentMessages   Message[] @relation("sentMessages")
   receivedMessages Message[] @relation("receivedMessages")
   chatParticipants ChatParticipant[]
+  internshipApplications InternshipApplication[]
+  followers      Follow[] @relation("follower")
+  following      Follow[] @relation("following")
+}
+
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String
+  follower    User     @relation("follower", fields: [followerId], references: [id], onDelete: Cascade)
+  followingId String
+  following   User     @relation("following", fields: [followingId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  
+  @@unique([followerId, followingId])
 }
 
 model Post {
@@ -34,10 +51,16 @@ model Post {
   content   String
   imageUrl  String?
   authorId  String
-  author    User     @relation(fields: [authorId], references: [id])
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  likesCount Int     @default(0)
+  commentsCount Int @default(0)
+  sharesCount Int    @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   isDeleted Boolean  @default(false)
+  deletedAt DateTime?
+  isShared  Boolean  @default(false)
+  originalPostId String?
   
   likes    Like[]
   comments Comment[]
@@ -46,9 +69,9 @@ model Post {
 model Like {
   id        String   @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   postId    String
-  post      Post     @relation(fields: [postId], references: [id])
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   
   @@unique([userId, postId])
@@ -58,12 +81,14 @@ model Comment {
   id        String   @id @default(cuid())
   content   String
   authorId  String
-  author    User     @relation(fields: [authorId], references: [id])
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
   postId    String
-  post      Post     @relation(fields: [postId], references: [id])
-  createdAt DateTime @default(now())
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
   isEdited  Boolean  @default(false)
   editedAt  DateTime?
+  createdAt DateTime @default(now())
+  isDeleted Boolean  @default(false)
+  deletedAt DateTime?
 }
 
 model Chat {
@@ -79,9 +104,9 @@ model Chat {
 model ChatParticipant {
   id        String   @id @default(cuid())
   chatId    String
-  chat      Chat     @relation(fields: [chatId], references: [id])
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   joinedAt  DateTime @default(now())
   
   @@unique([chatId, userId])
@@ -91,21 +116,23 @@ model Message {
   id         String   @id @default(cuid())
   content    String
   senderId   String
-  sender     User     @relation("sentMessages", fields: [senderId], references: [id])
+  sender     User     @relation("sentMessages", fields: [senderId], references: [id], onDelete: Cascade)
   receiverId String?
-  receiver   User?    @relation("receivedMessages", fields: [receiverId], references: [id])
+  receiver   User?    @relation("receivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
   chatId     String?
-  chat       Chat?    @relation(fields: [chatId], references: [id])
+  chat       Chat?    @relation(fields: [chatId], references: [id], onDelete: Cascade)
   fileUrl    String?
   fileType   String?
   fileName   String?
   replyToId  String?
-  replyTo    Message? @relation("MessageReply", fields: [replyToId], references: [id])
   isRead     Boolean  @default(false)
   readAt     DateTime?
+  deliveredAt DateTime?
   isEdited   Boolean  @default(false)
   editedAt   DateTime?
   isDeleted  Boolean  @default(false)
+  deletedBy  String?
+  reactions  String?
   createdAt  DateTime @default(now())
 }
 
@@ -118,6 +145,7 @@ model Internship {
   duration    Int
   stipend     Int      @default(0)
   deadline    DateTime
+  tradeId     Int?
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   
@@ -127,9 +155,9 @@ model Internship {
 model InternshipApplication {
   id           String   @id @default(cuid())
   studentId    String
-  student      User     @relation(fields: [studentId], references: [id])
+  student      User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
   internshipId String
-  internship   Internship @relation(fields: [internshipId], references: [id])
+  internship   Internship @relation(fields: [internshipId], references: [id], onDelete: Cascade)
   status       String   @default("PENDING")
   message      String?
   appliedAt    DateTime @default(now())
@@ -139,20 +167,32 @@ model InternshipApplication {
 }
 
 model Trade {
-  id      Int    @id @default(autoincrement())
-  name    String
+  id          Int      @id @default(autoincrement())
+  name        String
   description String?
-  icon    String?
-  color   String?
-  modules Module[]
+  icon        String?
+  color       String?
+  modules     Module[]
 }
 
 model Module {
-  id          Int    @id @default(autoincrement())
+  id          Int      @id @default(autoincrement())
   tradeId     Int
-  trade       Trade  @relation(fields: [tradeId], references: [id])
+  trade       Trade    @relation(fields: [tradeId], references: [id], onDelete: Cascade)
   level       Int
   code        String
   name        String
   description String?
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  message   String
+  relatedId String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
 }
