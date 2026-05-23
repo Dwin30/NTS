@@ -107,6 +107,21 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+app.post('/api/auth/change-password', authenticate, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!isValid) return res.status(400).json({ error: 'Current password is incorrect' });
+    
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({ where: { id: req.user.id }, data: { passwordHash: hashedPassword } });
+    res.json({ message: 'Password changed successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to change password' });
+  }
+});
+
 // ============ FILE UPLOAD ============
 app.post('/api/upload', authenticate, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -159,18 +174,40 @@ app.post('/api/chat/private/:userId', authenticate, async (req, res) => {
   }
 });
 
+app.post('/api/chat/group', authenticate, async (req, res) => {
+  const { name, participantIds } = req.body;
+  try {
+    const chat = await prisma.chat.create({
+      data: {
+        name,
+        isGroup: true,
+        participants: { create: [{ userId: req.user.id }, ...participantIds.map(id => ({ userId: id }))] }
+      },
+      include: { participants: { include: { user: { select: { id: true, fullName: true, avatar: true, role: true } } } } }
+    });
+    res.json(chat);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create group' });
+  }
+});
+
 app.get('/api/chat/:chatId/messages', authenticate, async (req, res) => {
   const { chatId } = req.params;
+  const { limit = 50, before } = req.query;
   try {
+    const where = { chatId, isDeleted: false };
+    if (before) where.createdAt = { lt: new Date(before) };
+    
     const messages = await prisma.message.findMany({
-      where: { chatId, isDeleted: false },
+      where,
       include: {
         sender: { select: { id: true, fullName: true, avatar: true } },
         replyTo: { include: { sender: { select: { id: true, fullName: true } } } }
       },
-      orderBy: { createdAt: 'asc' }
+      orderBy: { createdAt: 'desc' },
+      take: parseInt(limit)
     });
-    res.json({ messages });
+    res.json({ messages: messages.reverse(), hasMore: messages.length === parseInt(limit) });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -185,6 +222,12 @@ app.post('/api/chat/messages', authenticate, async (req, res) => {
     });
     
     io.to(`user:${receiverId}`).emit('message:received', message);
+    if (chatId) {
+      const chat = await prisma.chat.findUnique({ where: { id: chatId }, include: { participants: true } });
+      chat?.participants.forEach(p => {
+        if (p.userId !== req.user.id) io.to(`user:${p.userId}`).emit('message:received', message);
+      });
+    }
     res.status(201).json(message);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -209,12 +252,18 @@ app.put('/api/chat/messages/:messageId', authenticate, async (req, res) => {
 
 app.delete('/api/chat/messages/:messageId', authenticate, async (req, res) => {
   const { messageId } = req.params;
+  const { forEveryone = true } = req.body;
   try {
     const message = await prisma.message.findUnique({ where: { id: messageId } });
     if (message.senderId !== req.user.id && req.user.role !== 'ADMIN') return res.status(403).json({ error: 'Not authorized' });
     
-    await prisma.message.update({ where: { id: messageId }, data: { isDeleted: true } });
-    io.to(`user:${message.receiverId}`).emit('message:deleted', { messageId });
+    if (forEveryone) {
+      await prisma.message.update({ where: { id: messageId }, data: { isDeleted: true, deletedBy: req.user.id } });
+      io.to(`user:${message.receiverId}`).emit('message:deleted', { messageId });
+    } else {
+      // Delete for me only - just hide from this user (implement with user-specific visibility)
+      await prisma.message.update({ where: { id: messageId }, data: { isDeleted: true, deletedBy: req.user.id } });
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -225,7 +274,30 @@ app.post('/api/chat/messages/:messageId/read', authenticate, async (req, res) =>
   const { messageId } = req.params;
   try {
     await prisma.message.update({ where: { id: messageId }, data: { isRead: true, readAt: new Date() } });
-    io.emit('message:read', { messageId });
+    const message = await prisma.message.findUnique({ where: { id: messageId } });
+    io.to(`user:${message.senderId}`).emit('message:read', { messageId });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/chat/messages/:messageId/react', authenticate, async (req, res) => {
+  const { messageId } = req.params;
+  const { reaction } = req.body;
+  try {
+    const message = await prisma.message.findUnique({ where: { id: messageId } });
+    let reactions = message.reactions ? JSON.parse(message.reactions) : {};
+    if (reactions[req.user.id] === reaction) {
+      delete reactions[req.user.id];
+    } else {
+      reactions[req.user.id] = reaction;
+    }
+    const updatedMessage = await prisma.message.update({
+      where: { id: messageId },
+      data: { reactions: JSON.stringify(reactions) }
+    });
+    io.to(`user:${message.senderId}`).emit('message:reacted', { messageId, reactions });
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -250,6 +322,7 @@ app.get('/api/chat/search', authenticate, async (req, res) => {
 app.get('/api/posts/feed', authenticate, async (req, res) => {
   try {
     const posts = await prisma.post.findMany({
+      where: { isDeleted: false },
       include: { author: { select: { id: true, fullName: true, avatar: true, role: true } } },
       orderBy: { createdAt: 'desc' },
       take: 50
@@ -257,7 +330,7 @@ app.get('/api/posts/feed', authenticate, async (req, res) => {
     
     const postsWithLikes = await Promise.all(posts.map(async (post) => {
       const likeCount = await prisma.like.count({ where: { postId: post.id } });
-      const commentCount = await prisma.comment.count({ where: { postId: post.id } });
+      const commentCount = await prisma.comment.count({ where: { postId: post.id, isDeleted: false } });
       const userLike = await prisma.like.findFirst({ where: { userId: req.user.id, postId: post.id } });
       return { ...post, isLiked: !!userLike, likesCount: likeCount, commentsCount: commentCount };
     }));
@@ -274,8 +347,37 @@ app.post('/api/posts', authenticate, async (req, res) => {
       data: { content, imageUrl: imageUrl || null, authorId: req.user.id },
       include: { author: { select: { id: true, fullName: true, avatar: true, role: true } } }
     });
+    await prisma.user.update({ where: { id: req.user.id }, data: { postsCount: { increment: 1 } } });
     io.emit('post:created', post);
     res.status(201).json(post);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/posts/:postId', authenticate, async (req, res) => {
+  const { postId } = req.params;
+  const { content } = req.body;
+  try {
+    const post = await prisma.post.update({
+      where: { id: postId },
+      data: { content, updatedAt: new Date() },
+      include: { author: { select: { id: true, fullName: true, avatar: true, role: true } } }
+    });
+    io.emit('post:edited', post);
+    res.json(post);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/posts/:postId', authenticate, async (req, res) => {
+  const { postId } = req.params;
+  try {
+    await prisma.post.update({ where: { id: postId }, data: { isDeleted: true, deletedAt: new Date() } });
+    await prisma.user.update({ where: { id: req.user.id }, data: { postsCount: { decrement: 1 } } });
+    io.emit('post:deleted', postId);
+    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -305,6 +407,7 @@ app.post('/api/posts/:postId/comments', authenticate, async (req, res) => {
       data: { content, authorId: req.user.id, postId },
       include: { author: { select: { id: true, fullName: true, avatar: true } } }
     });
+    await prisma.post.update({ where: { id: postId }, data: { commentsCount: { increment: 1 } } });
     io.emit('comment:added', { postId, comment });
     res.status(201).json(comment);
   } catch (error) {
@@ -316,11 +419,62 @@ app.get('/api/posts/:postId/comments', authenticate, async (req, res) => {
   const { postId } = req.params;
   try {
     const comments = await prisma.comment.findMany({
-      where: { postId },
+      where: { postId, isDeleted: false },
       include: { author: { select: { id: true, fullName: true, avatar: true } } },
       orderBy: { createdAt: 'asc' }
     });
     res.json(comments);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/posts/:postId/comments/:commentId', authenticate, async (req, res) => {
+  const { postId, commentId } = req.params;
+  const { content } = req.body;
+  try {
+    const comment = await prisma.comment.update({
+      where: { id: commentId },
+      data: { content, isEdited: true, editedAt: new Date() },
+      include: { author: { select: { id: true, fullName: true, avatar: true } } }
+    });
+    io.emit('comment:edited', { postId, comment });
+    res.json(comment);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/posts/:postId/comments/:commentId', authenticate, async (req, res) => {
+  const { postId, commentId } = req.params;
+  try {
+    await prisma.comment.update({ where: { id: commentId }, data: { isDeleted: true, deletedAt: new Date() } });
+    await prisma.post.update({ where: { id: postId }, data: { commentsCount: { decrement: 1 } } });
+    io.emit('comment:deleted', { postId, commentId });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/posts/:postId/share', authenticate, async (req, res) => {
+  const { postId } = req.params;
+  try {
+    const originalPost = await prisma.post.findUnique({ where: { id: postId } });
+    const sharedPost = await prisma.post.create({
+      data: {
+        content: `Shared a post: ${originalPost.content.substring(0, 100)}...`,
+        imageUrl: originalPost.imageUrl,
+        authorId: req.user.id,
+        isShared: true,
+        originalPostId: postId
+      },
+      include: { author: { select: { id: true, fullName: true, avatar: true, role: true } } }
+    });
+    await prisma.user.update({ where: { id: req.user.id }, data: { postsCount: { increment: 1 } } });
+    await prisma.post.update({ where: { id: postId }, data: { sharesCount: { increment: 1 } } });
+    io.emit('post:created', sharedPost);
+    res.status(201).json(sharedPost);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -332,7 +486,7 @@ app.get('/api/users/profile/:userId', authenticate, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, fullName: true, email: true, role: true, avatar: true, bio: true, phone: true, school: true, createdAt: true }
+      select: { id: true, fullName: true, email: true, role: true, avatar: true, bio: true, phone: true, school: true, postsCount: true, followersCount: true, followingCount: true, createdAt: true }
     });
     res.json(user);
   } catch (error) {
@@ -361,6 +515,26 @@ app.get('/api/users/suggested', authenticate, async (req, res) => {
       take: 10
     });
     res.json(users);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/users/:userId/follow', authenticate, async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const existing = await prisma.follow.findFirst({ where: { followerId: req.user.id, followingId: userId } });
+    if (existing) {
+      await prisma.follow.delete({ where: { id: existing.id } });
+      await prisma.user.update({ where: { id: req.user.id }, data: { followingCount: { decrement: 1 } } });
+      await prisma.user.update({ where: { id: userId }, data: { followersCount: { decrement: 1 } } });
+      res.json({ following: false });
+    } else {
+      await prisma.follow.create({ data: { followerId: req.user.id, followingId: userId } });
+      await prisma.user.update({ where: { id: req.user.id }, data: { followingCount: { increment: 1 } } });
+      await prisma.user.update({ where: { id: userId }, data: { followersCount: { increment: 1 } } });
+      res.json({ following: true });
+    }
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -416,174 +590,10 @@ app.get('/api/dashboard/stats', authenticate, async (req, res) => {
   const [students, trainers, posts, internships] = await Promise.all([
     prisma.user.count({ where: { role: 'STUDENT' } }),
     prisma.user.count({ where: { role: 'TRAINER' } }),
-    prisma.post.count(),
+    prisma.post.count({ where: { isDeleted: false } }),
     prisma.internship.count()
   ]);
   res.json({ students, trainers, posts, internships });
-});
-
-// ============ MISSING POST ROUTES ============
-
-// Create a new post (POST /api/posts)
-app.post('/api/posts', authenticate, async (req, res) => {
-  const { content, imageUrl } = req.body;
-  if (!content || content.trim() === '') {
-    return res.status(400).json({ error: 'Content is required' });
-  }
-  try {
-    const post = await prisma.post.create({
-      data: {
-        content: content.trim(),
-        imageUrl: imageUrl || null,
-        authorId: req.user.id,
-      },
-      include: {
-        author: { select: { id: true, fullName: true, avatar: true, role: true } }
-      }
-    });
-    // Update user's post count
-    await prisma.user.update({
-      where: { id: req.user.id },
-      data: { postsCount: { increment: 1 } }
-    });
-    // Emit new post via Socket.IO
-    const newPostForSocket = { ...post, isLiked: false, likesCount: 0, commentsCount: 0 };
-    io.emit('post:created', newPostForSocket);
-    res.status(201).json(newPostForSocket);
-  } catch (error) {
-    console.error('Create post error:', error);
-    res.status(500).json({ error: 'Failed to create post' });
-  }
-});
-
-// Get comments for a specific post (GET /api/posts/:postId/comments)
-app.get('/api/posts/:postId/comments', authenticate, async (req, res) => {
-  const { postId } = req.params;
-  try {
-    const comments = await prisma.comment.findMany({
-      where: { postId, isDeleted: false },
-      include: {
-        author: { select: { id: true, fullName: true, avatar: true } }
-      },
-      orderBy: { createdAt: 'asc' }
-    });
-    res.json(comments);
-  } catch (error) {
-    console.error('Fetch comments error:', error);
-    res.status(500).json({ error: 'Failed to fetch comments' });
-  }
-});
-
-// Add a comment to a post (POST /api/posts/:postId/comments)
-app.post('/api/posts/:postId/comments', authenticate, async (req, res) => {
-  const { postId } = req.params;
-  const { content } = req.body;
-  if (!content || content.trim() === '') {
-    return res.status(400).json({ error: 'Comment content is required' });
-  }
-  try {
-    const comment = await prisma.comment.create({
-      data: {
-        content: content.trim(),
-        authorId: req.user.id,
-        postId: postId,
-      },
-      include: {
-        author: { select: { id: true, fullName: true, avatar: true } }
-      }
-    });
-    // Update post's comment count
-    await prisma.post.update({
-      where: { id: postId },
-      data: { commentsCount: { increment: 1 } }
-    });
-    io.emit('comment:added', { postId, comment });
-    res.status(201).json(comment);
-  } catch (error) {
-    console.error('Add comment error:', error);
-    res.status(500).json({ error: 'Failed to add comment' });
-  }
-});
-
-// ============ MISSING PROFILE & SUGGESTED USERS ROUTES ============
-
-// Get a user's profile by ID
-app.get('/api/users/profile/:userId', authenticate, async (req, res) => {
-  const { userId } = req.params;
-  try {
-    const userProfile = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        fullName: true,
-        role: true,
-        avatar: true,
-        bio: true,
-        phone: true,
-        school: true,
-        postsCount: true,
-        followersCount: true,
-        followingCount: true,
-        createdAt: true
-      }
-    });
-    if (!userProfile) return res.status(404).json({ error: 'User not found' });
-    res.json(userProfile);
-  } catch (error) {
-    console.error('Fetch profile error:', error);
-    res.status(500).json({ error: 'Failed to fetch profile' });
-  }
-});
-
-// Update user's own profile
-app.put('/api/users/profile', authenticate, async (req, res) => {
-  const { fullName, bio, phone, school, avatar } = req.body;
-  try {
-    const updatedUser = await prisma.user.update({
-      where: { id: req.user.id },
-      data: { fullName, bio, phone, school, avatar }
-    });
-    res.json(updatedUser);
-  } catch (error) {
-    console.error('Update profile error:', error);
-    res.status(500).json({ error: 'Failed to update profile' });
-  }
-});
-
-// Get suggested users to follow
-app.get('/api/users/suggested', authenticate, async (req, res) => {
-  try {
-    const users = await prisma.user.findMany({
-      where: { id: { not: req.user.id } },
-      select: { id: true, fullName: true, avatar: true, role: true },
-      take: 10
-    });
-    res.json(users);
-  } catch (error) {
-    console.error('Fetch suggested users error:', error);
-    res.status(500).json({ error: 'Failed to fetch suggestions' });
-  }
-});
-
-// ============ MISSING CHANGE PASSWORD ROUTE ============
-app.post('/api/auth/change-password', authenticate, async (req, res) => {
-  const { currentPassword, newPassword } = req.body;
-  try {
-    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-    const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
-    if (!isValid) return res.status(400).json({ error: 'Current password is incorrect' });
-    
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await prisma.user.update({
-      where: { id: req.user.id },
-      data: { passwordHash: hashedPassword }
-    });
-    res.json({ message: 'Password changed successfully' });
-  } catch (error) {
-    console.error('Change password error:', error);
-    res.status(500).json({ error: 'Failed to change password' });
-  }
 });
 
 // ============ SOCKET.IO ============
@@ -617,6 +627,13 @@ io.on('connection', (socket) => {
     const senderSocketId = onlineUsers.get(data.senderId);
     if (senderSocketId) {
       io.to(senderSocketId).emit('message:read', { messageId: data.messageId });
+    }
+  });
+
+  socket.on('message:react', (data) => {
+    const receiverSocketId = onlineUsers.get(data.to);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit('message:reacted', { messageId: data.messageId, reaction: data.reaction });
     }
   });
 

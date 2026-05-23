@@ -3,11 +3,11 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { io } from 'socket.io-client';
 import { 
-  FaPaperPlane, FaSearch, FaUserPlus, FaComment, FaCheck, FaCheckDouble, 
-  FaTrash, FaEdit, FaReply, FaTimes, FaPaperclip,
-  FaArrowLeft, FaVideo as FaVideoCall, FaMicrophone, FaMicrophoneSlash,
-  FaVideoSlash, FaPhoneSlash, FaArrowDown, FaPlay, FaPause,
-  FaPhone, FaPhoneAlt, FaStop, FaSmile
+  FaPaperPlane, FaSearch, FaUserPlus, FaComment, FaTrash, FaEdit, FaReply, 
+  FaTimes, FaPaperclip, FaArrowLeft, FaVideo as FaVideoCall, 
+  FaMicrophone, FaMicrophoneSlash, FaVideoSlash, FaPhoneSlash, 
+  FaArrowDown, FaPlay, FaPause, FaPhone, FaPhoneAlt, FaStop, FaSmile,
+  FaCheck, FaCheckDouble, FaRegSmile, FaImage, FaFile, FaCamera, FaUserCircle
 } from 'react-icons/fa';
 import toast from 'react-hot-toast';
 import api from '../services/api';
@@ -47,8 +47,6 @@ const Messages = () => {
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [callDuration, setCallDuration] = useState(0);
   const [showReactionPicker, setShowReactionPicker] = useState(null);
-  const [touchStartX, setTouchStartX] = useState(0);
-  const [touchEndX, setTouchEndX] = useState(0);
   
   const videoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -73,28 +71,6 @@ const Messages = () => {
         ))}
       </div>
     );
-  };
-  
-  // Swipe handlers
-  const handleTouchStart = (e) => {
-    setTouchStartX(e.targetTouches[0].clientX);
-  };
-  
-  const handleTouchEnd = (message) => {
-    if (!touchStartX) return;
-    const diff = touchStartX - (touchEndX || touchStartX);
-    if (diff > 50) {
-      handleReplyClick(message);
-    } else if (diff < -50 && message.senderId === user.id) {
-      setSelectedMessage(message);
-      setShowDeleteConfirm(true);
-    }
-    setTouchStartX(0);
-    setTouchEndX(0);
-  };
-  
-  const handleTouchMove = (e) => {
-    setTouchEndX(e.targetTouches[0].clientX);
   };
   
   useEffect(() => {
@@ -133,7 +109,7 @@ const Messages = () => {
     });
     
     socket.on('message:read', ({ messageId }) => {
-      setMessages(prev => prev.map(msg => msg.id === messageId ? { ...msg, isRead: true } : msg));
+      setMessages(prev => prev.map(msg => msg.id === messageId ? { ...msg, isRead: true, readAt: new Date() } : msg));
     });
     
     socket.on('message:updated', (updatedMessage) => {
@@ -143,6 +119,10 @@ const Messages = () => {
     socket.on('message:deleted', ({ messageId }) => {
       setMessages(prev => prev.filter(msg => msg.id !== messageId));
       fetchChats();
+    });
+    
+    socket.on('message:reacted', ({ messageId, reaction }) => {
+      setMessages(prev => prev.map(msg => msg.id === messageId ? { ...msg, reaction } : msg));
     });
     
     socket.on('typing:start', ({ userId }) => {
@@ -200,6 +180,7 @@ const Messages = () => {
       socket.off('message:read');
       socket.off('message:updated');
       socket.off('message:deleted');
+      socket.off('message:reacted');
       socket.off('typing:start');
       socket.off('typing:stop');
       socket.off('call:incoming');
@@ -233,6 +214,13 @@ const Messages = () => {
       const res = await api.get(`/chat/${chatId}/messages`);
       setMessages(res.data.messages || []);
       scrollToBottom();
+      
+      // Mark unread messages as read
+      const unreadMessages = (res.data.messages || []).filter(m => !m.isRead && m.senderId !== user.id);
+      unreadMessages.forEach(msg => {
+        api.post(`/chat/messages/${msg.id}/read`);
+        socket?.emit('message:read', { messageId: msg.id, senderId: msg.senderId });
+      });
     } catch (error) {
       console.error('Fetch messages error:', error);
     }
@@ -264,8 +252,8 @@ const Messages = () => {
   const handleReaction = async (messageId, reaction) => {
     try {
       await api.post(`/chat/messages/${messageId}/react`, { reaction });
+      socket.emit('message:react', { messageId, reaction, to: getOtherParticipant()?.id });
       setMessages(prev => prev.map(msg => msg.id === messageId ? { ...msg, reaction } : msg));
-      toast.success(`Reacted ${reaction}`);
     } catch (error) {
       console.error('Reaction error:', error);
     }
@@ -347,7 +335,8 @@ const Messages = () => {
         content: '',
         receiverId: other?.id,
         fileUrl: result.data.url,
-        fileType: file.type
+        fileType: file.type,
+        fileName: file.name
       });
       setMessages(prev => [...prev, res.data]);
       if (socket && other) {
@@ -574,10 +563,11 @@ const Messages = () => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
   
+  // Message status - shows "Seen" or "Delivered" or "Sent" as text (Instagram style)
   const MessageStatus = ({ message, isOwn }) => {
     if (!isOwn) return null;
-    if (message.isRead) return <FaCheckDouble className="text-blue-500 text-xs" />;
-    return <FaCheck className="text-gray-400 text-xs" />;
+    if (message.isRead) return <span className="text-[10px] text-gray-400">Seen</span>;
+    return <span className="text-[10px] text-gray-400">Sent</span>;
   };
   
   const AudioPlayer = ({ audioUrl, messageId }) => {
@@ -619,7 +609,7 @@ const Messages = () => {
     };
     
     return (
-      <div className="flex items-center space-x-2 min-w-[200px]">
+      <div className="flex items-center gap-2 min-w-[180px]">
         <button onClick={togglePlay} className="w-8 h-8 rounded-full bg-green-500 hover:bg-green-600 flex items-center justify-center">
           {isPlaying ? <FaPause size={12} className="text-white" /> : <FaPlay size={12} className="text-white ml-0.5" />}
         </button>
@@ -642,345 +632,326 @@ const Messages = () => {
   const otherUser = getOtherParticipant();
   
   return (
-    <>
-      <div className="flex h-[calc(100vh-4rem)] bg-gray-100 dark:bg-gray-900">
-        {/* Chat List Sidebar */}
-        <div className={`${isMobile && showChatArea ? 'hidden' : 'flex'} flex-col w-full md:w-96 bg-white dark:bg-gray-800 border-r dark:border-gray-700 h-full`}>
-          <div className="p-4 border-b dark:border-gray-700">
-            <div className="flex justify-between items-center">
-              <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Chats</h1>
-              <button onClick={() => setShowSearch(!showSearch)} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
-                <FaUserPlus className="text-green-500" size={20} />
-              </button>
-            </div>
-            {showSearch && (
-              <div className="mt-3">
-                <div className="relative">
-                  <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
-                  <input
-                    type="text"
-                    placeholder="Search users..."
-                    value={searchQuery}
-                    onChange={(e) => { setSearchQuery(e.target.value); searchUsers(e.target.value); }}
-                    className="w-full pl-10 pr-4 py-2 border rounded-full focus:ring-2 focus:ring-green-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                  />
-                </div>
-                {searchResults.length > 0 && (
-                  <div className="absolute mt-1 w-80 bg-white dark:bg-gray-800 rounded-xl shadow-lg border dark:border-gray-700 z-10">
-                    {searchResults.map(user => (
-                      <button
-                        key={user.id}
-                        onClick={() => startChat(user.id)}
-                        className="w-full flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-700 transition"
-                      >
-                        <div className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center text-white font-bold">
-                          {getInitials(user.fullName)}
-                        </div>
-                        <div className="flex-1 text-left">
-                          <p className="font-semibold text-gray-800 dark:text-white">{user.fullName}</p>
-                          <p className="text-xs text-gray-500">{user.role}</p>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+    <div className="flex h-[calc(100vh-4rem)] bg-gray-100 dark:bg-gray-900">
+      {/* Chat List Sidebar */}
+      <div className={`${isMobile && showChatArea ? 'hidden' : 'flex'} flex-col w-full md:w-96 bg-white dark:bg-gray-800 border-r dark:border-gray-700 h-full`}>
+        <div className="p-4 border-b dark:border-gray-700">
+          <div className="flex justify-between items-center">
+            <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Chats</h1>
+            <button onClick={() => setShowSearch(!showSearch)} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
+              <FaUserPlus className="text-green-500" size={20} />
+            </button>
           </div>
-          
-          <div className="flex-1 overflow-y-auto">
-            {chats.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-gray-400">
-                <FaComment size={48} className="mb-3 opacity-50" />
-                <p>No chats yet</p>
-                <button onClick={() => setShowSearch(true)} className="mt-3 text-green-500 text-sm font-medium">
-                  Start a conversation
-                </button>
+          {showSearch && (
+            <div className="mt-3">
+              <div className="relative">
+                <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
+                <input
+                  type="text"
+                  placeholder="Search users..."
+                  value={searchQuery}
+                  onChange={(e) => { setSearchQuery(e.target.value); searchUsers(e.target.value); }}
+                  className="w-full pl-10 pr-4 py-2 border rounded-full focus:ring-2 focus:ring-green-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                />
               </div>
-            ) : (
-              chats.map(chat => {
-                const other = chat.participants?.find(p => p.userId !== user.id)?.user;
-                const lastMsg = chat.messages?.[0];
-                const unread = chat.messages?.filter(m => !m.isRead && m.senderId !== user.id).length || 0;
-                const isActive = selectedChat?.id === chat.id;
-                
-                return (
-                  <button
-                    key={chat.id}
-                    onClick={() => selectChat(chat)}
-                    className={`w-full flex items-center gap-3 p-4 hover:bg-gray-50 dark:hover:bg-gray-700 transition border-b dark:border-gray-700 ${isActive && !isMobile ? 'bg-green-50 dark:bg-green-900/20' : ''}`}
-                  >
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-r from-green-500 to-green-600 flex items-center justify-center text-white font-bold shadow-sm">
-                      {getInitials(other?.fullName)}
-                    </div>
-                    <div className="flex-1 text-left min-w-0">
-                      <div className="flex justify-between items-baseline">
-                        <p className="font-semibold text-gray-800 dark:text-white truncate">{other?.fullName}</p>
-                        {lastMsg && (
-                          <span className="text-xs text-gray-400 flex-shrink-0 ml-2">
-                            {new Date(lastMsg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        )}
+              {searchResults.length > 0 && (
+                <div className="absolute mt-1 w-80 bg-white dark:bg-gray-800 rounded-xl shadow-lg border dark:border-gray-700 z-10">
+                  {searchResults.map(user => (
+                    <button
+                      key={user.id}
+                      onClick={() => startChat(user.id)}
+                      className="w-full flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-700 transition"
+                    >
+                      <div className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center text-white font-bold">
+                        {getInitials(user.fullName)}
                       </div>
-                      <p className="text-sm text-gray-500 dark:text-gray-400 truncate">
-                        {lastMsg?.content || (lastMsg?.fileType?.startsWith('audio/') ? '🎤 Voice message' : lastMsg?.fileType?.startsWith('video/') ? '📹 Video' : lastMsg?.fileType?.startsWith('image/') ? '📷 Photo' : 'No messages yet')}
-                      </p>
-                    </div>
-                    {unread > 0 && (
-                      <span className="bg-green-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                        {unread}
-                      </span>
-                    )}
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </div>
-        
-        {/* Chat Area */}
-        <div className={`${isMobile && !showChatArea ? 'hidden' : 'flex'} flex-1 flex-col bg-gray-50 dark:bg-gray-900`}>
-          {selectedChat && otherUser ? (
-            <>
-              {/* Chat Header */}
-              <div className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 px-4 py-3 flex items-center justify-between shadow-sm">
-                <div className="flex items-center gap-3">
-                  {isMobile && (
-                    <button onClick={goBackToChatList} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full">
-                      <FaArrowLeft size={20} className="text-gray-600 dark:text-gray-400" />
+                      <div className="flex-1 text-left">
+                        <p className="font-semibold text-gray-800 dark:text-white">{user.fullName}</p>
+                        <p className="text-xs text-gray-500">{user.role}</p>
+                      </div>
                     </button>
-                  )}
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-r from-green-500 to-green-600 flex items-center justify-center text-white font-bold">
-                    {getInitials(otherUser.fullName)}
-                  </div>
-                  <div>
-                    <h2 className="font-semibold text-gray-800 dark:text-white">{otherUser.fullName}</h2>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {isTyping ? <span className="text-green-500">Typing...</span> : otherUser.role}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => initiateCall(true)}
-                  disabled={isCalling || isCallActive}
-                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full text-gray-500 hover:text-green-500"
-                >
-                  <FaVideoCall size={20} />
-                </button>
-              </div>
-              
-              {/* Reply Preview */}
-              {replyingTo && (
-                <div className="bg-gray-100 dark:bg-gray-800 px-4 py-2 border-l-4 border-green-500 flex justify-between items-center">
-                  <div className="flex-1">
-                    <p className="text-xs text-green-600 font-semibold">Replying to</p>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 truncate">{replyingTo.content || 'Media'}</p>
-                  </div>
-                  <button onClick={() => setReplyingTo(null)} className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full">
-                    <FaTimes size={12} className="text-gray-500" />
-                  </button>
+                  ))}
                 </div>
               )}
-              
-              {/* Edit Preview */}
-              {editingMessage && (
-                <div className="bg-gray-100 dark:bg-gray-800 px-4 py-2 border-l-4 border-blue-500 flex justify-between items-center">
-                  <div className="flex-1">
-                    <p className="text-xs text-blue-600 font-semibold">Editing</p>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 truncate">{editingMessage.content}</p>
-                  </div>
-                  <button onClick={() => { setEditingMessage(null); setInput(''); }} className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full">
-                    <FaTimes size={12} className="text-gray-500" />
-                  </button>
-                </div>
-              )}
-              
-              {/* Messages Container */}
-              <div
-                ref={messagesContainerRef}
-                onScroll={handleScroll}
-                className="flex-1 overflow-y-auto p-4 space-y-3"
-              >
-                {messages.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full text-gray-400">
-                    <FaComment size={48} className="mb-3 opacity-30" />
-                    <p>No messages yet</p>
-                    <p className="text-sm">Send a message to start the conversation</p>
-                  </div>
-                ) : (
-                  messages.map((msg) => {
-                    const isOwn = msg.senderId === user.id;
-                    const isAudio = msg.fileType?.startsWith('audio/');
-                    const isVideo = msg.fileType?.startsWith('video/');
-                    const isImage = msg.fileType?.startsWith('image/');
-                    const repliedTo = msg.replyToId ? messages.find(m => m.id === msg.replyToId) : null;
-                    
-                    return (
-                      <div
-                        key={msg.id}
-                        className={`flex ${isOwn ? 'justify-end' : 'justify-start'} message-item group relative`}
-                        onTouchStart={handleTouchStart}
-                        onTouchMove={handleTouchMove}
-                        onTouchEnd={() => handleTouchEnd(msg)}
-                      >
-                        <div
-                          className={`max-w-[75%] px-4 py-2 rounded-2xl relative ${
-                            isOwn
-                              ? 'bg-green-500 text-white rounded-br-sm'
-                              : 'bg-white dark:bg-gray-800 text-gray-800 dark:text-white shadow-md rounded-bl-sm'
-                          }`}
-                        >
-                          {repliedTo && (
-                            <div className={`text-xs mb-1 p-1 rounded ${isOwn ? 'bg-green-600' : 'bg-gray-100 dark:bg-gray-700'} opacity-75`}>
-                              <p className="font-semibold">↳ {repliedTo.senderId === user.id ? 'You' : repliedTo.sender?.fullName}</p>
-                              <p className="truncate">{repliedTo.content || 'Media'}</p>
-                            </div>
-                          )}
-                          
-                          {msg.content && <p className="text-sm break-words">{msg.content}</p>}
-                          
-                          {msg.fileUrl && (
-                            <>
-                              {isImage && (
-                                <img
-                                  src={msg.fileUrl}
-                                  alt=""
-                                  className="max-w-full rounded mt-1 max-h-60 cursor-pointer"
-                                  onClick={() => window.open(msg.fileUrl)}
-                                />
-                              )}
-                              {isVideo && (
-                                <video controls className="max-w-full rounded mt-1 max-h-60">
-                                  <source src={msg.fileUrl} />
-                                </video>
-                              )}
-                              {isAudio && <AudioPlayer audioUrl={msg.fileUrl} messageId={msg.id} />}
-                            </>
-                          )}
-                          
-                          {msg.reaction && (
-                            <div className="absolute -top-3 -right-2 text-lg">{msg.reaction}</div>
-                          )}
-                          
-                          <div className="flex items-center justify-end gap-1 mt-1">
-                            <span className={`text-[10px] ${isOwn ? 'text-green-200' : 'text-gray-400'}`}>
-                              {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </span>
-                            <MessageStatus message={msg} isOwn={isOwn} />
-                          </div>
-                          
-                          {/* Reaction Button */}
-                          {!isMobile && (
-                            <button
-                              onClick={() => setShowReactionPicker(showReactionPicker === msg.id ? null : msg.id)}
-                              className="absolute left-2 top-1/2 transform -translate-y-1/2 opacity-0 group-hover:opacity-100 transition"
-                            >
-                              <FaSmile size={14} className="text-gray-500" />
-                            </button>
-                          )}
-                          
-                          {showReactionPicker === msg.id && (
-                            <ReactionPicker onSelect={(r) => handleReaction(msg.id, r)} onClose={() => setShowReactionPicker(null)} />
-                          )}
-                          
-                          {/* Action Buttons (Desktop) */}
-                          {!isMobile && (
-                            <div className="absolute -top-8 right-0 bg-white dark:bg-gray-800 rounded-full shadow-lg flex gap-1 p-1 opacity-0 group-hover:opacity-100 transition z-10">
-                              <button onClick={() => handleReplyClick(msg)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full">
-                                <FaReply size={12} className="text-gray-600" />
-                              </button>
-                              {isOwn && (
-                                <>
-                                  <button onClick={() => handleEditClick(msg)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full">
-                                    <FaEdit size={12} className="text-gray-600" />
-                                  </button>
-                                  <button onClick={() => { setSelectedMessage(msg); setShowDeleteConfirm(true); }} className="p-1.5 hover:bg-red-100 rounded-full">
-                                    <FaTrash size={12} className="text-red-500" />
-                                  </button>
-                                </>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-                <div ref={messagesEndRef} />
-              </div>
-              
-              {showScrollButton && (
-                <button
-                  onClick={scrollToBottom}
-                  className="absolute bottom-20 right-4 bg-green-500 text-white rounded-full p-2 shadow-lg hover:bg-green-600 transition z-10"
-                >
-                  <FaArrowDown size={16} />
-                </button>
-              )}
-              
-              {/* Message Input */}
-              <div className="bg-white dark:bg-gray-800 border-t dark:border-gray-700 px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploading}
-                    className="p-2 text-gray-500 hover:text-green-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
-                  >
-                    <FaPaperclip size={20} />
-                  </button>
-                  <button
-                    onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
-                    className={`p-2 rounded-full transition ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'text-gray-500 hover:text-green-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
-                  >
-                    {isRecording ? <FaStop size={16} /> : <FaMicrophone size={20} />}
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*,video/*,audio/*"
-                    className="hidden"
-                    onChange={(e) => { if (e.target.files?.[0]) handleFileUpload(e.target.files[0]); e.target.value = ''; }}
-                  />
-                  <div className="flex-1">
-                    <textarea
-                      value={input}
-                      onChange={handleTyping}
-                      onKeyPress={handleKeyPress}
-                      placeholder={editingMessage ? "Edit message..." : replyingTo ? "Reply..." : "Type a message..."}
-                      rows="1"
-                      className="w-full px-4 py-2 border dark:border-gray-600 rounded-full resize-none focus:outline-none focus:ring-2 focus:ring-green-500 text-sm bg-gray-50 dark:bg-gray-700 dark:text-white"
-                      style={{ maxHeight: '100px' }}
-                    />
-                  </div>
-                  <button
-                    onClick={editingMessage ? editMessage : sendMessage}
-                    disabled={(!input.trim() && !editingMessage) || sending}
-                    className="p-2 bg-green-500 text-white rounded-full hover:bg-green-600 disabled:opacity-50 transition shadow-md"
-                  >
-                    <FaPaperPlane size={18} />
-                  </button>
-                </div>
-                <div className="mt-1 text-xs text-gray-400 flex gap-3">
-                  <span>📎 Attach</span>
-                  <span>{isRecording ? '🔴 Recording...' : '🎙️ Voice'}</span>
-                  <span>⌨️ Enter to send</span>
-                  <span>↩️ Swipe left to reply | Swipe right to delete</span>
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-center text-gray-400">
-                <FaComment size={64} className="mx-auto mb-4 opacity-30" />
-                <p className="text-lg font-medium">No conversation selected</p>
-                <p className="text-sm">Choose a chat or start a new one</p>
-                <button onClick={() => setShowSearch(true)} className="mt-4 px-4 py-2 bg-green-500 text-white rounded-full text-sm font-medium hover:bg-green-600">
-                  Find Students
-                </button>
-              </div>
             </div>
           )}
         </div>
+        
+        <div className="flex-1 overflow-y-auto">
+          {chats.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-gray-400">
+              <FaComment size={48} className="mb-3 opacity-50" />
+              <p>No chats yet</p>
+              <button onClick={() => setShowSearch(true)} className="mt-3 text-green-500 text-sm font-medium">
+                Start a conversation
+              </button>
+            </div>
+          ) : (
+            chats.map(chat => {
+              const other = chat.participants?.find(p => p.userId !== user.id)?.user;
+              const lastMsg = chat.messages?.[0];
+              const unread = chat.messages?.filter(m => !m.isRead && m.senderId !== user.id).length || 0;
+              const isActive = selectedChat?.id === chat.id;
+              
+              return (
+                <button
+                  key={chat.id}
+                  onClick={() => selectChat(chat)}
+                  className={`w-full flex items-center gap-3 p-4 hover:bg-gray-50 dark:hover:bg-gray-700 transition border-b dark:border-gray-700 ${isActive && !isMobile ? 'bg-green-50 dark:bg-green-900/20' : ''}`}
+                >
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-r from-green-500 to-green-600 flex items-center justify-center text-white font-bold shadow-sm">
+                    {getInitials(other?.fullName)}
+                  </div>
+                  <div className="flex-1 text-left min-w-0">
+                    <div className="flex justify-between items-baseline">
+                      <p className="font-semibold text-gray-800 dark:text-white truncate">{other?.fullName}</p>
+                      {lastMsg && (
+                        <span className="text-xs text-gray-400 flex-shrink-0 ml-2">
+                          {new Date(lastMsg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 truncate">
+                      {lastMsg?.content || (lastMsg?.fileType?.startsWith('audio/') ? '🎤 Voice message' : lastMsg?.fileType?.startsWith('video/') ? '📹 Video' : lastMsg?.fileType?.startsWith('image/') ? '📷 Photo' : 'No messages yet')}
+                    </p>
+                  </div>
+                  {unread > 0 && (
+                    <span className="bg-green-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                      {unread}
+                    </span>
+                  )}
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
+      
+      {/* Chat Area */}
+      <div className={`${isMobile && !showChatArea ? 'hidden' : 'flex'} flex-1 flex-col bg-gray-50 dark:bg-gray-900`}>
+        {selectedChat && otherUser ? (
+          <>
+            {/* Chat Header */}
+            <div className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 px-4 py-3 flex items-center justify-between shadow-sm">
+              <div className="flex items-center gap-3">
+                {isMobile && (
+                  <button onClick={goBackToChatList} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full">
+                    <FaArrowLeft size={20} className="text-gray-600 dark:text-gray-400" />
+                  </button>
+                )}
+                <div className="w-10 h-10 rounded-full bg-gradient-to-r from-green-500 to-green-600 flex items-center justify-center text-white font-bold">
+                  {getInitials(otherUser.fullName)}
+                </div>
+                <div>
+                  <h2 className="font-semibold text-gray-800 dark:text-white">{otherUser.fullName}</h2>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {isTyping ? <span className="text-green-500">Typing...</span> : otherUser.role}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => initiateCall(true)}
+                disabled={isCalling || isCallActive}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full text-gray-500 hover:text-green-500"
+              >
+                <FaVideoCall size={20} />
+              </button>
+            </div>
+            
+            {/* Reply Preview */}
+            {replyingTo && (
+              <div className="bg-gray-100 dark:bg-gray-800 px-4 py-2 border-l-4 border-green-500 flex justify-between items-center">
+                <div className="flex-1">
+                  <p className="text-xs text-green-600 font-semibold">Replying to</p>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 truncate">{replyingTo.content || 'Media'}</p>
+                </div>
+                <button onClick={() => setReplyingTo(null)} className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full">
+                  <FaTimes size={12} className="text-gray-500" />
+                </button>
+              </div>
+            )}
+            
+            {/* Edit Preview */}
+            {editingMessage && (
+              <div className="bg-gray-100 dark:bg-gray-800 px-4 py-2 border-l-4 border-blue-500 flex justify-between items-center">
+                <div className="flex-1">
+                  <p className="text-xs text-blue-600 font-semibold">Editing</p>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 truncate">{editingMessage.content}</p>
+                </div>
+                <button onClick={() => { setEditingMessage(null); setInput(''); }} className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full">
+                  <FaTimes size={12} className="text-gray-500" />
+                </button>
+              </div>
+            )}
+            
+            {/* Messages Container */}
+            <div
+              ref={messagesContainerRef}
+              onScroll={handleScroll}
+              className="flex-1 overflow-y-auto p-4 space-y-3"
+            >
+              {messages.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                  <FaComment size={48} className="mb-3 opacity-30" />
+                  <p>No messages yet</p>
+                  <p className="text-sm">Send a message to start the conversation</p>
+                </div>
+              ) : (
+                messages.map((msg) => {
+                  const isOwn = msg.senderId === user.id;
+                  const isAudio = msg.fileType?.startsWith('audio/');
+                  const isVideo = msg.fileType?.startsWith('video/');
+                  const isImage = msg.fileType?.startsWith('image/');
+                  const repliedTo = msg.replyToId ? messages.find(m => m.id === msg.replyToId) : null;
+                  
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`flex ${isOwn ? 'justify-end' : 'justify-start'} message-item group relative`}
+                    >
+                      <div
+                        className={`max-w-[75%] px-4 py-2 rounded-2xl relative ${
+                          isOwn
+                            ? 'bg-green-500 text-white rounded-br-sm'
+                            : 'bg-white dark:bg-gray-800 text-gray-800 dark:text-white shadow-md rounded-bl-sm'
+                        }`}
+                      >
+                        {repliedTo && (
+                          <div className={`text-xs mb-1 p-1 rounded ${isOwn ? 'bg-green-600' : 'bg-gray-100 dark:bg-gray-700'} opacity-75`}>
+                            <p className="font-semibold">↳ {repliedTo.senderId === user.id ? 'You' : repliedTo.sender?.fullName}</p>
+                            <p className="truncate">{repliedTo.content || 'Media'}</p>
+                          </div>
+                        )}
+                        
+                        {msg.content && <p className="text-sm break-words">{msg.content}</p>}
+                        
+                        {msg.fileUrl && (
+                          <>
+                            {isImage && (
+                              <img
+                                src={msg.fileUrl}
+                                alt=""
+                                className="max-w-full rounded mt-1 max-h-60 cursor-pointer"
+                                onClick={() => window.open(msg.fileUrl)}
+                              />
+                            )}
+                            {isVideo && (
+                              <video controls className="max-w-full rounded mt-1 max-h-60">
+                                <source src={msg.fileUrl} />
+                              </video>
+                            )}
+                            {isAudio && <AudioPlayer audioUrl={msg.fileUrl} messageId={msg.id} />}
+                          </>
+                        )}
+                        
+                        {msg.reaction && (
+                          <div className="absolute -top-3 -right-2 text-lg">{msg.reaction}</div>
+                        )}
+                        
+                        <div className="flex items-center justify-end gap-1 mt-1">
+                          <span className={`text-[10px] ${isOwn ? 'text-green-200' : 'text-gray-400'}`}>
+                            {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                          <MessageStatus message={msg} isOwn={isOwn} />
+                        </div>
+                        
+                        {/* Desktop Hover Actions */}
+                        {!isMobile && (
+                          <div className="absolute -top-8 right-0 bg-white dark:bg-gray-800 rounded-full shadow-lg flex gap-1 p-1 opacity-0 group-hover:opacity-100 transition z-10">
+                            <button onClick={() => handleReplyClick(msg)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full" title="Reply">
+                              <FaReply size={12} className="text-gray-600" />
+                            </button>
+                            {isOwn && (
+                              <>
+                                <button onClick={() => handleEditClick(msg)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full" title="Edit">
+                                  <FaEdit size={12} className="text-gray-600" />
+                                </button>
+                                <button onClick={() => { setSelectedMessage(msg); setShowDeleteConfirm(true); }} className="p-1.5 hover:bg-red-100 rounded-full" title="Delete">
+                                  <FaTrash size={12} className="text-red-500" />
+                                </button>
+                              </>
+                            )}
+                            <button onClick={() => setShowReactionPicker(showReactionPicker === msg.id ? null : msg.id)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full" title="React">
+                              <FaSmile size={12} className="text-gray-600" />
+                            </button>
+                          </div>
+                        )}
+                        
+                        {showReactionPicker === msg.id && (
+                          <ReactionPicker onSelect={(r) => handleReaction(msg.id, r)} onClose={() => setShowReactionPicker(null)} />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+            
+            {showScrollButton && (
+              <button
+                onClick={scrollToBottom}
+                className="absolute bottom-20 right-4 bg-green-500 text-white rounded-full p-2 shadow-lg hover:bg-green-600 transition z-10"
+              >
+                <FaArrowDown size={16} />
+              </button>
+            )}
+            
+            {/* Message Input - Clean, no help text */}
+            <div className="bg-white dark:bg-gray-800 border-t dark:border-gray-700 px-4 py-3">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="p-2 text-gray-500 hover:text-green-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
+                >
+                  <FaPaperclip size={20} />
+                </button>
+                <button
+                  onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
+                  className={`p-2 rounded-full transition ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'text-gray-500 hover:text-green-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                >
+                  {isRecording ? <FaStop size={16} /> : <FaMicrophone size={20} />}
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,video/*,audio/*"
+                  className="hidden"
+                  onChange={(e) => { if (e.target.files?.[0]) handleFileUpload(e.target.files[0]); e.target.value = ''; }}
+                />
+                <div className="flex-1">
+                  <textarea
+                    value={input}
+                    onChange={handleTyping}
+                    onKeyPress={handleKeyPress}
+                    placeholder="Message..."
+                    rows="1"
+                    className="w-full px-4 py-2 border dark:border-gray-600 rounded-full resize-none focus:outline-none focus:ring-2 focus:ring-green-500 text-sm bg-gray-50 dark:bg-gray-700 dark:text-white"
+                    style={{ maxHeight: '100px' }}
+                  />
+                </div>
+                <button
+                  onClick={editingMessage ? editMessage : sendMessage}
+                  disabled={(!input.trim() && !editingMessage) || sending}
+                  className="p-2 bg-green-500 text-white rounded-full hover:bg-green-600 disabled:opacity-50 transition shadow-md"
+                >
+                  <FaPaperPlane size={18} />
+                </button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center text-gray-400">
+              <FaComment size={64} className="mx-auto mb-4 opacity-30" />
+              <p className="text-lg font-medium">Select a chat</p>
+              <p className="text-sm">Choose a conversation to start messaging</p>
+              <button onClick={() => setShowSearch(true)} className="mt-4 px-4 py-2 bg-green-500 text-white rounded-full text-sm font-medium hover:bg-green-600">
+                Find Users
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       
       {/* Delete Confirmation Modal */}
@@ -1050,7 +1021,7 @@ const Messages = () => {
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 };
 

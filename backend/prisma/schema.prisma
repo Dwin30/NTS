@@ -31,6 +31,19 @@ model User {
   receivedMessages Message[] @relation("receivedMessages")
   chatParticipants ChatParticipant[]
   internshipApplications InternshipApplication[]
+  followers      Follow[] @relation("follower")
+  following      Follow[] @relation("following")
+}
+
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String
+  follower    User     @relation("follower", fields: [followerId], references: [id], onDelete: Cascade)
+  followingId String
+  following   User     @relation("following", fields: [followingId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  
+  @@unique([followerId, followingId])
 }
 
 model Post {
@@ -41,6 +54,7 @@ model Post {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   isDeleted Boolean  @default(false)
+  deletedAt DateTime?
   isShared  Boolean  @default(false)
   originalPostId String?
   likesCount Int     @default(0)
@@ -73,6 +87,7 @@ model Comment {
   editedAt  DateTime?
   createdAt DateTime @default(now())
   isDeleted Boolean  @default(false)
+  deletedAt DateTime?
   
   author User @relation(fields: [authorId], references: [id])
   post   Post @relation(fields: [postId], references: [id])
