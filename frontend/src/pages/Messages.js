@@ -7,7 +7,7 @@ import {
   FaTrash, FaEdit, FaReply, FaTimes, FaPaperclip,
   FaArrowLeft, FaVideo as FaVideoCall, FaMicrophone, FaMicrophoneSlash,
   FaVideoSlash, FaPhoneSlash, FaArrowDown, FaPlay, FaPause,
-  FaPhone, FaPhoneAlt, FaEllipsisV, FaStop, FaSmile
+  FaPhone, FaPhoneAlt, FaStop
 } from 'react-icons/fa';
 import toast from 'react-hot-toast';
 import api from '../services/api';
@@ -43,11 +43,13 @@ const Messages = () => {
   const [isMobile, setIsMobile] = useState(false);
   const [showChatArea, setShowChatArea] = useState(false);
   const [playingAudioId, setPlayingAudioId] = useState(null);
-  const [showMessageOptions, setShowMessageOptions] = useState(false);
-  const [selectedMessage, setSelectedMessage] = useState(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [selectedMessage, setSelectedMessage] = useState(null);
   const [callDuration, setCallDuration] = useState(0);
   const [showReactionPicker, setShowReactionPicker] = useState(null);
+  const [swipedMessageId, setSwipedMessageId] = useState(null);
+  const [touchStartX, setTouchStartX] = useState(0);
+  const [touchEndX, setTouchEndX] = useState(0);
   
   const videoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -77,6 +79,45 @@ const Messages = () => {
         ))}
       </div>
     );
+  };
+  
+  // Touch handlers for swipe gestures
+  const handleTouchStart = (e) => {
+    setTouchStartX(e.targetTouches[0].clientX);
+    setSwipedMessageId(null);
+  };
+  
+  const handleTouchMove = (e, messageId) => {
+    setTouchEndX(e.targetTouches[0].clientX);
+    const diff = touchStartX - e.targetTouches[0].clientX;
+    if (Math.abs(diff) > 30) {
+      setSwipedMessageId(messageId);
+    }
+  };
+  
+  const handleTouchEnd = (message) => {
+    if (!touchStartX || !touchEndX) {
+      setSwipedMessageId(null);
+      return;
+    }
+    
+    const diff = touchStartX - touchEndX;
+    const minSwipeDistance = 50;
+    
+    if (diff > minSwipeDistance) {
+      // Swipe left - Reply
+      handleReplyClick(message);
+    } else if (diff < -minSwipeDistance) {
+      // Swipe right - Delete (only for own messages)
+      if (message.senderId === user.id) {
+        setSelectedMessage(message);
+        setShowDeleteConfirm(true);
+      }
+    }
+    
+    setSwipedMessageId(null);
+    setTouchStartX(0);
+    setTouchEndX(0);
   };
   
   // Handle mobile back button
@@ -191,7 +232,9 @@ const Messages = () => {
       if (otherUser && otherUser.id === userId) setIsTyping(false);
     });
     
+    // Video Call Events - FIXED
     socket.on('call:incoming', (data) => {
+      console.log('📞 Incoming call from:', data);
       setIncomingCall(data);
       const audio = new Audio('/ringtone.mp3');
       audio.loop = true;
@@ -201,6 +244,7 @@ const Messages = () => {
     });
     
     socket.on('call:accepted', async ({ signal }) => {
+      console.log('Call accepted, setting remote description');
       if (peerConnection && signal) {
         try {
           await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
@@ -213,22 +257,25 @@ const Messages = () => {
             setCallDuration(seconds);
           }, 1000);
         } catch (error) {
-          console.error('Error:', error);
+          console.error('Error setting remote description:', error);
         }
       }
     });
     
     socket.on('call:rejected', () => {
+      console.log('Call rejected');
       endCall();
       toast.error('Call rejected');
     });
     
     socket.on('call:ended', () => {
+      console.log('Call ended');
       endCall();
       toast.info('Call ended');
     });
     
     socket.on('call:webrtc:signal', async ({ signal, from }) => {
+      console.log('Received WebRTC signal from:', from);
       if (peerConnection) {
         try {
           if (signal.type === 'offer') {
@@ -403,7 +450,6 @@ const Messages = () => {
       await api.delete(`/chat/messages/${selectedMessage.id}`);
       setMessages(prev => prev.filter(msg => msg.id !== selectedMessage.id));
       setShowDeleteConfirm(false);
-      setShowMessageOptions(false);
       setSelectedMessage(null);
       toast.success('Message deleted');
     } catch (error) {
@@ -414,14 +460,14 @@ const Messages = () => {
   
   const handleReplyClick = (message) => {
     setReplyingTo(message);
-    setShowMessageOptions(false);
+    setSelectedMessage(null);
     document.querySelector('textarea')?.focus();
   };
   
   const handleEditClick = (message) => {
     setEditingMessage(message);
     setInput(message.content);
-    setShowMessageOptions(false);
+    setSelectedMessage(null);
     document.querySelector('textarea')?.focus();
   };
   
@@ -545,6 +591,7 @@ const Messages = () => {
     setEditingMessage(null);
   };
   
+  // Video Call Functions - FIXED with proper WebRTC
   const initiateCall = async (isVideo = true) => {
     const otherUser = getOtherParticipant();
     if (!otherUser) {
@@ -557,20 +604,34 @@ const Messages = () => {
       if (videoRef.current) videoRef.current.srcObject = stream;
       
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+        ]
       });
       setPeerConnection(pc);
       
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
       
       pc.ontrack = (event) => {
+        console.log('Received remote track');
         setRemoteStream(event.streams[0]);
         if (remoteVideoRef.current) remoteVideoRef.current.srcObject = event.streams[0];
       };
       
       pc.onicecandidate = (event) => {
         if (event.candidate) {
+          console.log('Sending ICE candidate');
           socket.emit('call:webrtc:signal', { signal: event.candidate, to: otherUser.id });
+        }
+      };
+      
+      pc.oniceconnectionstatechange = () => {
+        console.log('ICE connection state:', pc.iceConnectionState);
+        if (pc.iceConnectionState === 'failed') {
+          toast.error('Connection failed');
+          endCall();
         }
       };
       
@@ -583,6 +644,7 @@ const Messages = () => {
       setIsCalling(true);
       toast.success(`Calling ${otherUser.fullName}...`);
     } catch (err) {
+      console.error('Call error:', err);
       toast.error('Please grant camera/microphone permissions');
     }
   };
@@ -594,26 +656,39 @@ const Messages = () => {
       window.currentRingtone = null;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: incomingCall.isVideo, audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: incomingCall.isVideo, 
+        audio: true 
+      });
       setLocalStream(stream);
       if (videoRef.current) videoRef.current.srcObject = stream;
       
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+        ]
       });
       setPeerConnection(pc);
       
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
       
       pc.ontrack = (event) => {
+        console.log('Received remote track');
         setRemoteStream(event.streams[0]);
         if (remoteVideoRef.current) remoteVideoRef.current.srcObject = event.streams[0];
       };
       
       pc.onicecandidate = (event) => {
         if (event.candidate) {
+          console.log('Sending ICE candidate');
           socket.emit('call:webrtc:signal', { signal: event.candidate, to: incomingCall.fromId });
         }
+      };
+      
+      pc.oniceconnectionstatechange = () => {
+        console.log('ICE connection state:', pc.iceConnectionState);
       };
       
       socket.emit('call:accept', { to: incomingCall.fromId, from: user.id });
@@ -628,6 +703,7 @@ const Messages = () => {
         setCallDuration(seconds);
       }, 1000);
     } catch (err) {
+      console.error('Accept call error:', err);
       toast.error('Failed to accept call');
     }
   };
@@ -652,6 +728,10 @@ const Messages = () => {
     setIsCallActive(false);
     setIsCalling(false);
     setCallDuration(0);
+    
+    if (selectedChat && getOtherParticipant()) {
+      socket.emit('call:end', { to: getOtherParticipant().id });
+    }
   };
   
   const toggleMute = () => {
@@ -907,12 +987,36 @@ const Messages = () => {
                     const isVideo = message.fileType?.startsWith('video/');
                     const isImage = message.fileType?.startsWith('image/');
                     const repliedTo = message.replyToId ? messages.find(m => m.id === message.replyToId) : null;
+                    const isSwiped = swipedMessageId === message.id;
                     
                     return (
                       <div 
                         key={message.id} 
-                        className={`flex ${isOwn ? 'justify-end' : 'justify-start'} message-item group relative`}
+                        className={`flex ${isOwn ? 'justify-end' : 'justify-start'} message-item group relative transition-all duration-300 ${isSwiped ? 'translate-x-[-60px]' : 'translate-x-0'}`}
+                        onTouchStart={handleTouchStart}
+                        onTouchMove={(e) => handleTouchMove(e, message.id)}
+                        onTouchEnd={() => handleTouchEnd(message)}
                       >
+                        {/* Swipe Action Buttons */}
+                        {isSwiped && isMobile && (
+                          <div className="absolute left-0 top-0 bottom-0 flex items-center gap-2 px-2">
+                            <button 
+                              onClick={() => handleReplyClick(message)}
+                              className="bg-green-500 text-white p-3 rounded-full shadow-lg active:scale-95 transition"
+                            >
+                              <FaReply size={20} />
+                            </button>
+                            {isOwn && (
+                              <button 
+                                onClick={() => { setSelectedMessage(message); setShowDeleteConfirm(true); }}
+                                className="bg-red-500 text-white p-3 rounded-full shadow-lg active:scale-95 transition"
+                              >
+                                <FaTrash size={20} />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        
                         <div className={`max-w-[75%] px-4 py-2 rounded-2xl relative ${
                           isOwn ? 'bg-green-600 text-white rounded-br-sm' : 'bg-white text-gray-800 shadow-sm rounded-bl-sm dark:bg-gray-800 dark:text-white'
                         }`}>
@@ -983,13 +1087,6 @@ const Messages = () => {
                               )}
                             </div>
                           )}
-                          
-                          {/* Mobile Action Button */}
-                          {isMobile && (
-                            <button onClick={() => { setSelectedMessage(message); setShowMessageOptions(true); }} className="absolute right-2 top-1/2 transform -translate-y-1/2">
-                              <FaEllipsisV size={14} className="text-gray-500" />
-                            </button>
-                          )}
                         </div>
                       </div>
                     );
@@ -1032,8 +1129,7 @@ const Messages = () => {
                   <span>📎 Attach</span>
                   <span>{isRecording ? '🔴 Recording...' : '🎙️ Voice'}</span>
                   <span>⌨️ Enter to send</span>
-                  <span>↩️ Swipe reply</span>
-                  <span>😊 Long press for reactions</span>
+                  <span>↩️ Swipe left to reply | Swipe right to delete</span>
                 </div>
               </div>
             </>
@@ -1053,36 +1149,6 @@ const Messages = () => {
           )}
         </div>
       </div>
-      
-      {/* Mobile Message Options Modal */}
-      {showMessageOptions && selectedMessage && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-end justify-center" onClick={() => setShowMessageOptions(false)}>
-          <div className="bg-white rounded-t-2xl w-full max-w-md dark:bg-gray-800" onClick={(e) => e.stopPropagation()}>
-            <div className="p-4">
-              <div className="w-12 h-1 bg-gray-300 rounded-full mx-auto mb-4"></div>
-              <button onClick={() => handleReplyClick(selectedMessage)} className="w-full text-left px-4 py-3 hover:bg-gray-100 rounded-lg flex items-center space-x-3 dark:hover:bg-gray-700">
-                <FaReply className="text-green-600" />
-                <span className="dark:text-white">Reply</span>
-              </button>
-              {selectedMessage.senderId === user.id && (
-                <>
-                  <button onClick={() => handleEditClick(selectedMessage)} className="w-full text-left px-4 py-3 hover:bg-gray-100 rounded-lg flex items-center space-x-3 dark:hover:bg-gray-700">
-                    <FaEdit className="text-blue-600" />
-                    <span className="dark:text-white">Edit</span>
-                  </button>
-                  <button onClick={() => { setShowMessageOptions(false); setShowDeleteConfirm(true); }} className="w-full text-left px-4 py-3 hover:bg-gray-100 rounded-lg flex items-center space-x-3 text-red-600 dark:hover:bg-gray-700">
-                    <FaTrash />
-                    <span>Delete</span>
-                  </button>
-                </>
-              )}
-              <button onClick={() => setShowMessageOptions(false)} className="w-full text-center px-4 py-3 hover:bg-gray-100 rounded-lg mt-2 font-semibold dark:hover:bg-gray-700 dark:text-white">
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && selectedMessage && (
