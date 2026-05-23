@@ -64,6 +64,7 @@ app.use(cors({
     "https://exquisite-souffle-c3acd0.netlify.app",
     "https://polite-cucurucho-d21021.netlify.app",
     "https://nts-platform.netlify.app",
+    "https://nts-frontend.onrender.com",
     "https://nts-iey7-dwin30s-projects.vercel.app",
     "https://*.netlify.app",
     "https://*.vercel.app"
