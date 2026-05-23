@@ -7,7 +7,7 @@ import {
   FaTrash, FaEdit, FaReply, FaTimes, FaPaperclip,
   FaArrowLeft, FaVideo as FaVideoCall, FaMicrophone, FaMicrophoneSlash,
   FaVideoSlash, FaPhoneSlash, FaArrowDown, FaPlay, FaPause,
-  FaPhone, FaPhoneAlt, FaEllipsisV, FaStop
+  FaPhone, FaPhoneAlt, FaEllipsisV, FaStop, FaSmile
 } from 'react-icons/fa';
 import toast from 'react-hot-toast';
 import api from '../services/api';
@@ -47,6 +47,7 @@ const Messages = () => {
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
+  const [showReactionPicker, setShowReactionPicker] = useState(null);
   
   const videoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -58,6 +59,25 @@ const Messages = () => {
   const audioRefs = useRef({});
   const [isRecording, setIsRecording] = useState(false);
   const [mediaRecorder, setMediaRecorder] = useState(null);
+  
+  // Reaction Picker Component
+  const ReactionPicker = ({ onSelect, onClose }) => {
+    const reactions = ['❤️', '👍', '😂', '😮', '😢', '😡'];
+    
+    return (
+      <div className="reaction-picker absolute -top-12 left-0 flex gap-2 bg-white rounded-full p-2 shadow-lg z-20 dark:bg-gray-700">
+        {reactions.map(emoji => (
+          <button
+            key={emoji}
+            onClick={() => { onSelect(emoji); onClose(); }}
+            className="reaction-emoji text-2xl hover:scale-125 transition-transform"
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
+    );
+  };
   
   // Handle mobile back button
   useEffect(() => {
@@ -145,6 +165,12 @@ const Messages = () => {
       ));
     });
     
+    socket.on('message:reacted', ({ messageId, reaction }) => {
+      setMessages(prev => prev.map(msg => 
+        msg.id === messageId ? { ...msg, reaction } : msg
+      ));
+    });
+    
     socket.on('message:updated', (updatedMessage) => {
       setMessages(prev => prev.map(msg => msg.id === updatedMessage.id ? updatedMessage : msg));
       fetchChats();
@@ -225,6 +251,7 @@ const Messages = () => {
       socket.off('message:received');
       socket.off('message:delivered');
       socket.off('message:seen');
+      socket.off('message:reacted');
       socket.off('message:updated');
       socket.off('message:deleted');
       socket.off('typing:start');
@@ -303,6 +330,20 @@ const Messages = () => {
         socket.emit('typing:stop', { receiverId: otherUser.id });
       }, 1500);
     }
+  };
+  
+  const handleReaction = async (messageId, reaction) => {
+    try {
+      await api.post(`/chat/messages/${messageId}/react`, { reaction });
+      socket.emit('message:react', { messageId, reaction, to: getOtherParticipant()?.id });
+      setMessages(prev => prev.map(msg => 
+        msg.id === messageId ? { ...msg, reaction } : msg
+      ));
+      toast.success(`Reacted with ${reaction}`);
+    } catch (error) {
+      console.error('Reaction failed:', error);
+    }
+    setShowReactionPicker(null);
   };
   
   const sendMessage = async () => {
@@ -700,14 +741,14 @@ const Messages = () => {
   
   return (
     <>
-      <div className="flex h-[calc(100vh-4rem)] bg-gray-50 overflow-hidden">
+      <div className="flex h-[calc(100vh-4rem)] bg-gray-50 overflow-hidden dark:bg-gray-900">
         {/* Chat List */}
-        <div className={`${isMobile && showChatArea ? 'hidden' : 'flex'} flex-col w-full md:w-80 bg-white border-r shadow-sm h-full overflow-hidden`}>
-          <div className="p-4 border-b bg-white sticky top-0 z-10">
+        <div className={`${isMobile && showChatArea ? 'hidden' : 'flex'} flex-col w-full md:w-80 bg-white border-r shadow-sm h-full overflow-hidden dark:bg-gray-800 dark:border-gray-700`}>
+          <div className="p-4 border-b bg-white sticky top-0 z-10 dark:bg-gray-800 dark:border-gray-700">
             <div className="flex justify-between items-center mb-3">
-              <h2 className="text-xl font-bold text-gray-800">Messages</h2>
-              <button onClick={() => setShowSearch(!showSearch)} className="p-2 rounded-full hover:bg-gray-100">
-                <FaUserPlus className="text-green-600" size={18} />
+              <h2 className="text-xl font-bold text-gray-800 dark:text-white">Messages</h2>
+              <button onClick={() => setShowSearch(!showSearch)} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
+                <FaUserPlus className="text-green-600 dark:text-green-400" size={18} />
               </button>
             </div>
             {showSearch && (
@@ -719,19 +760,19 @@ const Messages = () => {
                     placeholder="Search users..." 
                     value={searchQuery} 
                     onChange={(e) => { setSearchQuery(e.target.value); searchUsers(e.target.value); }} 
-                    className="w-full pl-10 pr-4 py-2 border rounded-xl focus:ring-2 focus:ring-green-500 text-sm" 
+                    className="w-full pl-10 pr-4 py-2 border rounded-xl focus:ring-2 focus:ring-green-500 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white" 
                   />
                 </div>
                 {searchResults.length > 0 && (
-                  <div className="absolute bg-white border rounded-xl shadow-lg mt-1 left-4 right-4 z-10 max-h-60 overflow-y-auto">
+                  <div className="absolute bg-white border rounded-xl shadow-lg mt-1 left-4 right-4 z-10 max-h-60 overflow-y-auto dark:bg-gray-800 dark:border-gray-700">
                     {searchResults.map(result => (
-                      <button key={result.id} onClick={() => startChat(result.id)} className="w-full text-left px-4 py-3 hover:bg-gray-50 flex items-center space-x-3 border-b">
+                      <button key={result.id} onClick={() => startChat(result.id)} className="w-full text-left px-4 py-3 hover:bg-gray-50 flex items-center space-x-3 border-b dark:hover:bg-gray-700 dark:border-gray-700">
                         <div className="w-10 h-10 rounded-full bg-gradient-to-r from-green-500 to-green-700 flex items-center justify-center text-white font-bold text-sm">
                           {getInitials(result.fullName)}
                         </div>
                         <div>
-                          <p className="font-semibold text-gray-800">{result.fullName}</p>
-                          <p className="text-xs text-gray-500">{result.role}</p>
+                          <p className="font-semibold text-gray-800 dark:text-white">{result.fullName}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">{result.role}</p>
                         </div>
                       </button>
                     ))}
@@ -742,10 +783,10 @@ const Messages = () => {
           </div>
           <div className="flex-1 overflow-y-auto">
             {chats.length === 0 ? (
-              <div className="text-center py-12 text-gray-400">
+              <div className="text-center py-12 text-gray-400 dark:text-gray-500">
                 <FaComment className="text-5xl mx-auto mb-3 opacity-50" />
                 <p className="text-sm">No messages yet</p>
-                <button onClick={() => setShowSearch(true)} className="block mx-auto mt-3 text-green-600 text-sm font-medium hover:underline">
+                <button onClick={() => setShowSearch(true)} className="block mx-auto mt-3 text-green-600 dark:text-green-400 text-sm font-medium hover:underline">
                   Start a conversation
                 </button>
               </div>
@@ -767,7 +808,7 @@ const Messages = () => {
                   <button 
                     key={chat.id} 
                     onClick={() => selectChat(chat)} 
-                    className={`w-full text-left p-4 hover:bg-gray-50 transition border-b ${isActive && !isMobile ? 'bg-green-50 border-l-4 border-l-green-600' : ''}`}
+                    className={`w-full text-left p-4 hover:bg-gray-50 transition border-b dark:hover:bg-gray-700 dark:border-gray-700 ${isActive && !isMobile ? 'bg-green-50 border-l-4 border-l-green-600 dark:bg-green-900/20' : ''}`}
                   >
                     <div className="flex items-center space-x-3">
                       <div className="w-12 h-12 rounded-full bg-gradient-to-r from-green-500 to-green-700 flex items-center justify-center text-white font-bold shadow-sm">
@@ -775,14 +816,14 @@ const Messages = () => {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex justify-between items-baseline">
-                          <p className="font-semibold text-gray-800 truncate">{other?.fullName}</p>
+                          <p className="font-semibold text-gray-800 truncate dark:text-white">{other?.fullName}</p>
                           {lastMessage && (
                             <span className="text-xs text-gray-400 flex-shrink-0 ml-2">
                               {new Date(lastMessage.createdAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
                             </span>
                           )}
                         </div>
-                        <p className="text-sm text-gray-500 truncate">{lastMessageText}</p>
+                        <p className="text-sm text-gray-500 truncate dark:text-gray-400">{lastMessageText}</p>
                       </div>
                     </div>
                   </button>
@@ -793,14 +834,14 @@ const Messages = () => {
         </div>
         
         {/* Chat Area */}
-        <div className={`${isMobile && !showChatArea ? 'hidden' : 'flex'} flex-1 flex-col bg-gray-50 relative h-full overflow-hidden`}>
+        <div className={`${isMobile && !showChatArea ? 'hidden' : 'flex'} flex-1 flex-col bg-gray-50 relative h-full overflow-hidden dark:bg-gray-900`}>
           {selectedChat && otherUser ? (
             <>
-              <div className="bg-white border-b px-4 py-3 flex items-center justify-between shadow-sm sticky top-0 z-10">
+              <div className="bg-white border-b px-4 py-3 flex items-center justify-between shadow-sm sticky top-0 z-10 dark:bg-gray-800 dark:border-gray-700">
                 <div className="flex items-center space-x-3">
                   {isMobile && (
-                    <button onClick={goBackToChatList} className="p-2 rounded-full hover:bg-gray-100 mr-2">
-                      <FaArrowLeft size={18} className="text-gray-600" />
+                    <button onClick={goBackToChatList} className="p-2 rounded-full hover:bg-gray-100 mr-2 dark:hover:bg-gray-700">
+                      <FaArrowLeft size={18} className="text-gray-600 dark:text-gray-400" />
                     </button>
                   )}
                   <div className="flex items-center space-x-3">
@@ -808,42 +849,42 @@ const Messages = () => {
                       {getInitials(otherUser.fullName)}
                     </div>
                     <div>
-                      <h3 className="font-semibold text-gray-800 text-sm md:text-base">
+                      <h3 className="font-semibold text-gray-800 text-sm md:text-base dark:text-white">
                         {otherUser.fullName}
                       </h3>
                       <p className="text-xs">
-                        {isTyping ? <span className="text-green-600 animate-pulse">Typing...</span> : <span className="text-gray-500">{otherUser.role}</span>}
+                        {isTyping ? <span className="text-green-600 animate-pulse">Typing...</span> : <span className="text-gray-500 dark:text-gray-400">{otherUser.role}</span>}
                       </p>
                     </div>
                   </div>
                 </div>
-                <button onClick={() => initiateCall(true)} disabled={isCalling || isCallActive} className="p-2 rounded-full hover:bg-gray-100 text-gray-500 hover:text-green-600 disabled:opacity-50">
+                <button onClick={() => initiateCall(true)} disabled={isCalling || isCallActive} className="p-2 rounded-full hover:bg-gray-100 text-gray-500 hover:text-green-600 disabled:opacity-50 dark:hover:bg-gray-700">
                   <FaVideoCall size={18} />
                 </button>
               </div>
               
               {/* Reply Preview */}
               {replyingTo && (
-                <div className="bg-gray-100 px-4 py-2 border-l-4 border-green-500 flex justify-between items-center">
+                <div className="bg-gray-100 px-4 py-2 border-l-4 border-green-500 flex justify-between items-center dark:bg-gray-800">
                   <div className="flex-1">
                     <p className="text-xs text-green-600 font-semibold">Replying to</p>
-                    <p className="text-sm text-gray-600 truncate">{replyingTo.content || 'Media'}</p>
+                    <p className="text-sm text-gray-600 truncate dark:text-gray-400">{replyingTo.content || 'Media'}</p>
                   </div>
-                  <button onClick={() => setReplyingTo(null)} className="p-1 hover:bg-gray-200 rounded-full">
-                    <FaTimes size={12} />
+                  <button onClick={() => setReplyingTo(null)} className="p-1 hover:bg-gray-200 rounded-full dark:hover:bg-gray-700">
+                    <FaTimes size={12} className="text-gray-500" />
                   </button>
                 </div>
               )}
               
               {/* Edit Preview */}
               {editingMessage && (
-                <div className="bg-gray-100 px-4 py-2 border-l-4 border-blue-500 flex justify-between items-center">
+                <div className="bg-gray-100 px-4 py-2 border-l-4 border-blue-500 flex justify-between items-center dark:bg-gray-800">
                   <div className="flex-1">
                     <p className="text-xs text-blue-600 font-semibold">Editing</p>
-                    <p className="text-sm text-gray-600 truncate">{editingMessage.content}</p>
+                    <p className="text-sm text-gray-600 truncate dark:text-gray-400">{editingMessage.content}</p>
                   </div>
-                  <button onClick={() => { setEditingMessage(null); setInput(''); }} className="p-1 hover:bg-gray-200 rounded-full">
-                    <FaTimes size={12} />
+                  <button onClick={() => { setEditingMessage(null); setInput(''); }} className="p-1 hover:bg-gray-200 rounded-full dark:hover:bg-gray-700">
+                    <FaTimes size={12} className="text-gray-500" />
                   </button>
                 </div>
               )}
@@ -854,7 +895,7 @@ const Messages = () => {
                 className="flex-1 overflow-y-auto p-3 md:p-4 space-y-3"
               >
                 {messages.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                  <div className="flex flex-col items-center justify-center h-full text-gray-400 dark:text-gray-500">
                     <FaComment className="text-5xl mb-3 opacity-30" />
                     <p className="text-center text-sm">No messages yet</p>
                     <p className="text-xs">Send a message to start</p>
@@ -873,10 +914,10 @@ const Messages = () => {
                         className={`flex ${isOwn ? 'justify-end' : 'justify-start'} message-item group relative`}
                       >
                         <div className={`max-w-[75%] px-4 py-2 rounded-2xl relative ${
-                          isOwn ? 'bg-green-600 text-white rounded-br-sm' : 'bg-white text-gray-800 shadow-sm rounded-bl-sm'
+                          isOwn ? 'bg-green-600 text-white rounded-br-sm' : 'bg-white text-gray-800 shadow-sm rounded-bl-sm dark:bg-gray-800 dark:text-white'
                         }`}>
                           {repliedTo && (
-                            <div className={`text-xs mb-1 p-1 rounded ${isOwn ? 'bg-green-700' : 'bg-gray-100'} opacity-75`}>
+                            <div className={`text-xs mb-1 p-1 rounded ${isOwn ? 'bg-green-700' : 'bg-gray-100 dark:bg-gray-700'} opacity-75`}>
                               <p className="font-semibold">↳ {repliedTo.senderId === user.id ? 'You' : (repliedTo.sender?.fullName || 'User')}</p>
                               <p className="truncate">{repliedTo.content || 'Media'}</p>
                             </div>
@@ -898,22 +939,41 @@ const Messages = () => {
                               )}
                             </>
                           )}
+                          {message.reaction && (
+                            <div className="absolute -top-3 -right-2 text-lg reaction-animation">{message.reaction}</div>
+                          )}
                           <div className="flex items-center justify-end space-x-1 mt-1">
-                            <span className={`text-[10px] ${isOwn ? 'text-green-200' : 'text-gray-400'}`}>
+                            <span className={`text-[10px] ${isOwn ? 'text-green-200' : 'text-gray-400 dark:text-gray-500'}`}>
                               {new Date(message.createdAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
                             </span>
                             <MessageStatus message={message} isOwn={isOwn} />
                           </div>
                           
+                          {/* Reaction Button */}
+                          {!isMobile && (
+                            <button 
+                              onClick={() => setShowReactionPicker(showReactionPicker === message.id ? null : message.id)}
+                              className="absolute left-2 top-1/2 transform -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              <FaSmile size={14} className="text-gray-500" />
+                            </button>
+                          )}
+                          {showReactionPicker === message.id && (
+                            <ReactionPicker 
+                              onSelect={(reaction) => handleReaction(message.id, reaction)} 
+                              onClose={() => setShowReactionPicker(null)}
+                            />
+                          )}
+                          
                           {/* Desktop Hover Actions */}
                           {!isMobile && (
-                            <div className="absolute -top-8 right-0 bg-white rounded-full shadow-lg flex space-x-1 p-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                              <button onClick={() => handleReplyClick(message)} className="p-1.5 hover:bg-gray-100 rounded-full text-gray-600" title="Reply">
+                            <div className="absolute -top-8 right-0 bg-white rounded-full shadow-lg flex space-x-1 p-1 opacity-0 group-hover:opacity-100 transition-opacity z-10 dark:bg-gray-700">
+                              <button onClick={() => handleReplyClick(message)} className="p-1.5 hover:bg-gray-100 rounded-full text-gray-600 dark:hover:bg-gray-600" title="Reply">
                                 <FaReply size={12} />
                               </button>
                               {isOwn && (
                                 <>
-                                  <button onClick={() => handleEditClick(message)} className="p-1.5 hover:bg-gray-100 rounded-full text-gray-600" title="Edit">
+                                  <button onClick={() => handleEditClick(message)} className="p-1.5 hover:bg-gray-100 rounded-full text-gray-600 dark:hover:bg-gray-600" title="Edit">
                                     <FaEdit size={12} />
                                   </button>
                                   <button onClick={() => { setSelectedMessage(message); setShowDeleteConfirm(true); }} className="p-1.5 hover:bg-red-100 rounded-full text-red-500" title="Delete">
@@ -944,12 +1004,12 @@ const Messages = () => {
                 </button>
               )}
               
-              <div className="bg-white border-t px-3 py-2 md:px-4 md:py-3 shadow-sm">
+              <div className="bg-white border-t px-3 py-2 md:px-4 md:py-3 shadow-sm dark:bg-gray-800 dark:border-gray-700">
                 <div className="flex items-end space-x-2">
-                  <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="p-2 text-gray-500 hover:text-green-600 rounded-full hover:bg-gray-100 disabled:opacity-50">
+                  <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="p-2 text-gray-500 hover:text-green-600 rounded-full hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-gray-700">
                     <FaPaperclip size={16} />
                   </button>
-                  <button onClick={isRecording ? stopVoiceRecording : startVoiceRecording} disabled={uploading} className={`p-2 rounded-full transition ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'text-gray-500 hover:text-green-600 hover:bg-gray-100'} disabled:opacity-50`}>
+                  <button onClick={isRecording ? stopVoiceRecording : startVoiceRecording} disabled={uploading} className={`p-2 rounded-full transition ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'text-gray-500 hover:text-green-600 hover:bg-gray-100 dark:hover:bg-gray-700'} disabled:opacity-50`}>
                     {isRecording ? <FaStop size={14} /> : <FaMicrophone size={16} />}
                   </button>
                   <input ref={fileInputRef} type="file" accept="image/*,video/*,audio/*" className="hidden" onChange={(e) => { if (e.target.files?.[0]) handleFileUpload(e.target.files[0]); e.target.value = ''; }} />
@@ -960,7 +1020,7 @@ const Messages = () => {
                       onKeyPress={handleKeyPress} 
                       placeholder={editingMessage ? "Edit..." : replyingTo ? "Reply..." : "Type a message..."} 
                       rows="1" 
-                      className="w-full px-3 py-2 border border-gray-200 rounded-2xl resize-none focus:ring-2 focus:ring-green-500 text-sm bg-gray-50" 
+                      className="w-full px-3 py-2 border border-gray-200 rounded-2xl resize-none focus:ring-2 focus:ring-green-500 text-sm bg-gray-50 dark:bg-gray-700 dark:border-gray-600 dark:text-white" 
                       style={{ maxHeight: '80px' }} 
                     />
                   </div>
@@ -968,21 +1028,22 @@ const Messages = () => {
                     <FaPaperPlane size={14} />
                   </button>
                 </div>
-                <div className="mt-1 text-[10px] md:text-xs text-gray-400 flex items-center space-x-3">
+                <div className="mt-1 text-[10px] md:text-xs text-gray-400 dark:text-gray-500 flex items-center space-x-3">
                   <span>📎 Attach</span>
                   <span>{isRecording ? '🔴 Recording...' : '🎙️ Voice'}</span>
                   <span>⌨️ Enter to send</span>
                   <span>↩️ Swipe reply</span>
+                  <span>😊 Long press for reactions</span>
                 </div>
               </div>
             </>
           ) : (
             <div className="flex-1 flex items-center justify-center p-4">
-              <div className="text-center text-gray-400">
-                <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <div className="text-center text-gray-400 dark:text-gray-500">
+                <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4 dark:bg-gray-800">
                   <FaComment className="text-3xl text-gray-300" />
                 </div>
-                <p className="text-base font-medium text-gray-500">No conversation selected</p>
+                <p className="text-base font-medium text-gray-500 dark:text-gray-400">No conversation selected</p>
                 <p className="text-xs mt-1">Choose a chat or start a new one</p>
                 <button onClick={() => setShowSearch(true)} className="mt-4 px-4 py-2 bg-green-600 text-white rounded-full text-sm font-medium hover:bg-green-700">
                   Find Students
@@ -996,26 +1057,26 @@ const Messages = () => {
       {/* Mobile Message Options Modal */}
       {showMessageOptions && selectedMessage && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-end justify-center" onClick={() => setShowMessageOptions(false)}>
-          <div className="bg-white rounded-t-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-t-2xl w-full max-w-md dark:bg-gray-800" onClick={(e) => e.stopPropagation()}>
             <div className="p-4">
               <div className="w-12 h-1 bg-gray-300 rounded-full mx-auto mb-4"></div>
-              <button onClick={() => handleReplyClick(selectedMessage)} className="w-full text-left px-4 py-3 hover:bg-gray-100 rounded-lg flex items-center space-x-3">
+              <button onClick={() => handleReplyClick(selectedMessage)} className="w-full text-left px-4 py-3 hover:bg-gray-100 rounded-lg flex items-center space-x-3 dark:hover:bg-gray-700">
                 <FaReply className="text-green-600" />
-                <span>Reply</span>
+                <span className="dark:text-white">Reply</span>
               </button>
               {selectedMessage.senderId === user.id && (
                 <>
-                  <button onClick={() => handleEditClick(selectedMessage)} className="w-full text-left px-4 py-3 hover:bg-gray-100 rounded-lg flex items-center space-x-3">
+                  <button onClick={() => handleEditClick(selectedMessage)} className="w-full text-left px-4 py-3 hover:bg-gray-100 rounded-lg flex items-center space-x-3 dark:hover:bg-gray-700">
                     <FaEdit className="text-blue-600" />
-                    <span>Edit</span>
+                    <span className="dark:text-white">Edit</span>
                   </button>
-                  <button onClick={() => { setShowMessageOptions(false); setShowDeleteConfirm(true); }} className="w-full text-left px-4 py-3 hover:bg-gray-100 rounded-lg flex items-center space-x-3 text-red-600">
+                  <button onClick={() => { setShowMessageOptions(false); setShowDeleteConfirm(true); }} className="w-full text-left px-4 py-3 hover:bg-gray-100 rounded-lg flex items-center space-x-3 text-red-600 dark:hover:bg-gray-700">
                     <FaTrash />
                     <span>Delete</span>
                   </button>
                 </>
               )}
-              <button onClick={() => setShowMessageOptions(false)} className="w-full text-center px-4 py-3 hover:bg-gray-100 rounded-lg mt-2 font-semibold">
+              <button onClick={() => setShowMessageOptions(false)} className="w-full text-center px-4 py-3 hover:bg-gray-100 rounded-lg mt-2 font-semibold dark:hover:bg-gray-700 dark:text-white">
                 Cancel
               </button>
             </div>
@@ -1026,11 +1087,11 @@ const Messages = () => {
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && selectedMessage && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
-          <div className="bg-white rounded-2xl p-6 max-w-sm w-full mx-4">
-            <h3 className="text-lg font-bold text-gray-800 mb-2">Delete Message</h3>
-            <p className="text-gray-600 mb-6">Are you sure you want to delete this message?</p>
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full mx-4 dark:bg-gray-800">
+            <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-2">Delete Message</h3>
+            <p className="text-gray-600 dark:text-gray-400 mb-6">Are you sure you want to delete this message?</p>
             <div className="flex gap-3">
-              <button onClick={() => { setShowDeleteConfirm(false); setSelectedMessage(null); }} className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 font-semibold hover:bg-gray-50">
+              <button onClick={() => { setShowDeleteConfirm(false); setSelectedMessage(null); }} className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 font-semibold hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300">
                 Cancel
               </button>
               <button onClick={deleteMessage} className="flex-1 px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600">
