@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, createContext, useContext } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import Navbar from './components/Navbar';
@@ -14,30 +14,93 @@ import Profile from './pages/Profile';
 import AdminPanel from './pages/AdminPanel';
 import Courses from './pages/Courses';
 
+// Dark Mode Context
+export const ThemeContext = createContext({ darkMode: false, toggleDarkMode: () => {} });
+
+// Custom hook to use theme
+export const useTheme = () => {
+  const context = useContext(ThemeContext);
+  if (!context) {
+    throw new Error('useTheme must be used within a ThemeProvider');
+  }
+  return context;
+};
+
+// PWA Installation
+let deferredPrompt;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+});
+
 function App() {
   const { isAuthenticated, user } = useAuthStore();
+  const [darkMode, setDarkMode] = useState(() => {
+    const saved = localStorage.getItem('darkMode');
+    return saved === 'true';
+  });
+  const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('darkMode', darkMode);
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [darkMode]);
+
+  useEffect(() => {
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      setShowInstallPrompt(true);
+    });
+  }, []);
+
+  const toggleDarkMode = () => setDarkMode(prev => !prev);
+
+  const installPWA = () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then((choiceResult) => {
+        if (choiceResult.outcome === 'accepted') {
+          console.log('User accepted the install prompt');
+        }
+        deferredPrompt = null;
+        setShowInstallPrompt(false);
+      });
+    }
+  };
 
   return (
-    <Router>
-      <div className="min-h-screen bg-gray-50">
-        {isAuthenticated && <Navbar />}
-        <div className={isAuthenticated ? 'pt-16' : ''}>
-          <Routes>
-            <Route path="/login" element={!isAuthenticated ? <Login /> : <Navigate to="/" />} />
-            <Route path="/register" element={!isAuthenticated ? <Register /> : <Navigate to="/" />} />
-            <Route path="/verify-otp" element={!isAuthenticated ? <VerifyOTP /> : <Navigate to="/" />} />
-            <Route path="/forgot-password" element={!isAuthenticated ? <ForgotPassword /> : <Navigate to="/" />} />
-            <Route path="/" element={isAuthenticated ? <Dashboard /> : <Navigate to="/login" />} />
-            <Route path="/feed" element={isAuthenticated ? <Feed /> : <Navigate to="/login" />} />
-            <Route path="/messages" element={isAuthenticated ? <Messages /> : <Navigate to="/login" />} />
-            <Route path="/internships" element={isAuthenticated ? <Internships /> : <Navigate to="/login" />} />
-            <Route path="/courses" element={isAuthenticated ? <Courses /> : <Navigate to="/login" />} />
-            <Route path="/profile/:userId?" element={isAuthenticated ? <Profile /> : <Navigate to="/login" />} />
-            <Route path="/admin" element={isAuthenticated && user?.role === 'ADMIN' ? <AdminPanel /> : <Navigate to="/" />} />
-          </Routes>
+    <ThemeContext.Provider value={{ darkMode, toggleDarkMode }}>
+      <Router>
+        <div className={`min-h-screen transition-colors duration-300 ${darkMode ? 'dark bg-gray-900' : 'bg-gray-50'}`}>
+          {isAuthenticated && <Navbar />}
+          <div className={isAuthenticated ? 'pt-16' : ''}>
+            <Routes>
+              <Route path="/login" element={!isAuthenticated ? <Login /> : <Navigate to="/" />} />
+              <Route path="/register" element={!isAuthenticated ? <Register /> : <Navigate to="/" />} />
+              <Route path="/verify-otp" element={!isAuthenticated ? <VerifyOTP /> : <Navigate to="/" />} />
+              <Route path="/forgot-password" element={!isAuthenticated ? <ForgotPassword /> : <Navigate to="/" />} />
+              <Route path="/" element={isAuthenticated ? <Dashboard /> : <Navigate to="/login" />} />
+              <Route path="/feed" element={isAuthenticated ? <Feed /> : <Navigate to="/login" />} />
+              <Route path="/messages" element={isAuthenticated ? <Messages /> : <Navigate to="/login" />} />
+              <Route path="/internships" element={isAuthenticated ? <Internships /> : <Navigate to="/login" />} />
+              <Route path="/courses" element={isAuthenticated ? <Courses /> : <Navigate to="/login" />} />
+              <Route path="/profile/:userId?" element={isAuthenticated ? <Profile /> : <Navigate to="/login" />} />
+              <Route path="/admin" element={isAuthenticated && user?.role === 'ADMIN' ? <AdminPanel /> : <Navigate to="/" />} />
+            </Routes>
+          </div>
+          {showInstallPrompt && (
+            <button onClick={installPWA} className="install-pwa-btn">
+              📱 Install App
+            </button>
+          )}
         </div>
-      </div>
-    </Router>
+      </Router>
+    </ThemeContext.Provider>
   );
 }
 

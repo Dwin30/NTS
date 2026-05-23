@@ -18,7 +18,7 @@ export const useAuthStore = create(
           localStorage.setItem('token', token);
           return { success: true };
         } catch (error) {
-          return { success: false, error: error.response?.data?.error };
+          return { success: false, error: error.response?.data?.error || 'Login failed' };
         }
       },
       
@@ -27,7 +27,7 @@ export const useAuthStore = create(
           const res = await api.post('/auth/register', data);
           return { success: true, email: res.data.email };
         } catch (error) {
-          return { success: false, error: error.response?.data?.error };
+          return { success: false, error: error.response?.data?.error || 'Registration failed' };
         }
       },
       
@@ -39,7 +39,7 @@ export const useAuthStore = create(
           localStorage.setItem('token', token);
           return { success: true };
         } catch (error) {
-          return { success: false, error: error.response?.data?.error };
+          return { success: false, error: error.response?.data?.error || 'Verification failed' };
         }
       },
       
@@ -49,7 +49,7 @@ export const useAuthStore = create(
           set({ user: { ...get().user, ...res.data } });
           return { success: true };
         } catch (error) {
-          return { success: false, error: error.response?.data?.error };
+          return { success: false, error: error.response?.data?.error || 'Update failed' };
         }
       },
       

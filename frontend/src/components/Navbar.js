@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
+import { useTheme } from '../App';
 import { io } from 'socket.io-client';
-import { FaCode, FaHome, FaNewspaper, FaComment, FaBriefcase, FaUser, FaSignOutAlt, FaCrown, FaBars, FaTimes, FaBook } from 'react-icons/fa';
+import { FaCode, FaHome, FaNewspaper, FaComment, FaBriefcase, FaUser, FaSignOutAlt, FaCrown, FaBars, FaTimes, FaBook, FaMoon, FaSun } from 'react-icons/fa';
 
-const SOCKET_URL = 'https://nts-backend-409a.onrender.com';
+const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'https://nts-backend-409a.onrender.com';
 
 const Navbar = () => {
   const { user, logout, unreadCount, setUnreadCount, token } = useAuthStore();
+  const { darkMode, toggleDarkMode } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -61,23 +63,23 @@ const Navbar = () => {
   const isActive = (path) => location.pathname === path;
   
   return (
-    <nav className="bg-white shadow-md fixed top-0 left-0 right-0 z-50">
+    <nav className="bg-white dark:bg-gray-800 shadow-md fixed top-0 left-0 right-0 z-50 transition-colors duration-300">
       <div className="max-w-7xl mx-auto px-4">
         <div className="flex justify-between items-center h-16">
           <Link to="/" className="flex items-center space-x-2" onClick={() => setIsMenuOpen(false)}>
-            <FaCode className="text-2xl text-nts-green-600" />
-            <span className="font-bold text-xl">NTS</span>
+            <FaCode className="text-2xl text-green-600 dark:text-green-400" />
+            <span className="font-bold text-xl text-gray-800 dark:text-white">NTS</span>
           </Link>
           
           {/* Desktop Menu */}
           <div className="hidden md:flex items-center space-x-6">
-            <Link to="/" className={isActive('/') ? 'text-nts-green-600' : 'text-gray-600 hover:text-nts-green-600'}>
+            <Link to="/" className={isActive('/') ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-300 hover:text-green-600 dark:hover:text-green-400'}>
               <FaHome size={20} />
             </Link>
-            <Link to="/feed" className={isActive('/feed') ? 'text-nts-green-600' : 'text-gray-600 hover:text-nts-green-600'}>
+            <Link to="/feed" className={isActive('/feed') ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-300 hover:text-green-600 dark:hover:text-green-400'}>
               <FaNewspaper size={20} />
             </Link>
-            <Link to="/messages" className={`relative ${isActive('/messages') ? 'text-nts-green-600' : 'text-gray-600 hover:text-nts-green-600'}`}>
+            <Link to="/messages" className={`relative ${isActive('/messages') ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-300 hover:text-green-600 dark:hover:text-green-400'}`}>
               <FaComment size={20} />
               {unreadCount > 0 && (
                 <span className="absolute -top-2 -right-3 bg-red-500 text-white text-xs rounded-full min-w-[18px] h-[18px] flex items-center justify-center font-bold px-1">
@@ -85,61 +87,66 @@ const Navbar = () => {
                 </span>
               )}
             </Link>
-            <Link to="/internships" className={isActive('/internships') ? 'text-nts-green-600' : 'text-gray-600 hover:text-nts-green-600'}>
+            <Link to="/internships" className={isActive('/internships') ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-300 hover:text-green-600 dark:hover:text-green-400'}>
               <FaBriefcase size={20} />
             </Link>
-            {/* Courses link for all users */}
-            <Link to="/courses" className={isActive('/courses') ? 'text-nts-green-600' : 'text-gray-600 hover:text-nts-green-600'}>
+            <Link to="/courses" className={isActive('/courses') ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-300 hover:text-green-600 dark:hover:text-green-400'}>
               <FaBook size={20} />
             </Link>
-            <Link to="/profile" className={isActive('/profile') ? 'text-nts-green-600' : 'text-gray-600 hover:text-nts-green-600'}>
+            <Link to="/profile" className={isActive('/profile') ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-300 hover:text-green-600 dark:hover:text-green-400'}>
               <FaUser size={20} />
             </Link>
             {user?.role === 'ADMIN' && (
-              <Link to="/admin" className="text-yellow-600 hover:text-yellow-700">
+              <Link to="/admin" className="text-yellow-600 dark:text-yellow-400 hover:text-yellow-700">
                 <FaCrown size={20} />
               </Link>
             )}
-            <button onClick={handleLogout} className="text-gray-600 hover:text-red-500">
+            <button onClick={toggleDarkMode} className="text-gray-600 dark:text-gray-300 hover:text-yellow-500 dark:hover:text-yellow-400">
+              {darkMode ? <FaSun size={20} /> : <FaMoon size={20} />}
+            </button>
+            <button onClick={handleLogout} className="text-gray-600 dark:text-gray-300 hover:text-red-500 dark:hover:text-red-400">
               <FaSignOutAlt size={20} />
             </button>
           </div>
           
           {/* Mobile Menu Button */}
-          <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="md:hidden p-2 rounded-lg hover:bg-gray-100 transition">
-            {isMenuOpen ? <FaTimes size={20} /> : <FaBars size={20} />}
+          <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="md:hidden p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition">
+            {isMenuOpen ? <FaTimes size={20} className="text-gray-800 dark:text-white" /> : <FaBars size={20} className="text-gray-800 dark:text-white" />}
           </button>
         </div>
         
         {/* Mobile Menu */}
         {isMenuOpen && (
-          <div className="md:hidden py-4 border-t">
+          <div className="md:hidden py-4 border-t border-gray-200 dark:border-gray-700">
             <div className="flex flex-col space-y-3">
-              <Link to="/" onClick={() => setIsMenuOpen(false)} className="flex items-center space-x-3 px-2 py-2 rounded-lg hover:bg-gray-50">
+              <Link to="/" onClick={() => setIsMenuOpen(false)} className="flex items-center space-x-3 px-2 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-800 dark:text-white">
                 <FaHome size={18} /><span>Home</span>
               </Link>
-              <Link to="/feed" onClick={() => setIsMenuOpen(false)} className="flex items-center space-x-3 px-2 py-2 rounded-lg hover:bg-gray-50">
+              <Link to="/feed" onClick={() => setIsMenuOpen(false)} className="flex items-center space-x-3 px-2 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-800 dark:text-white">
                 <FaNewspaper size={18} /><span>Feed</span>
               </Link>
-              <Link to="/messages" onClick={() => setIsMenuOpen(false)} className="flex items-center justify-between px-2 py-2 rounded-lg hover:bg-gray-50">
-                <div className="flex items-center space-x-3"><FaComment size={18} /><span>Messages</span></div>
+              <Link to="/messages" onClick={() => setIsMenuOpen(false)} className="flex items-center justify-between px-2 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700">
+                <div className="flex items-center space-x-3"><FaComment size={18} className="text-gray-800 dark:text-white" /><span className="text-gray-800 dark:text-white">Messages</span></div>
                 {unreadCount > 0 && <span className="bg-red-500 text-white text-xs rounded-full px-2 py-0.5">{unreadCount}</span>}
               </Link>
-              <Link to="/internships" onClick={() => setIsMenuOpen(false)} className="flex items-center space-x-3 px-2 py-2 rounded-lg hover:bg-gray-50">
+              <Link to="/internships" onClick={() => setIsMenuOpen(false)} className="flex items-center space-x-3 px-2 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-800 dark:text-white">
                 <FaBriefcase size={18} /><span>Internships</span>
               </Link>
-              <Link to="/courses" onClick={() => setIsMenuOpen(false)} className="flex items-center space-x-3 px-2 py-2 rounded-lg hover:bg-gray-50">
+              <Link to="/courses" onClick={() => setIsMenuOpen(false)} className="flex items-center space-x-3 px-2 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-800 dark:text-white">
                 <FaBook size={18} /><span>Courses</span>
               </Link>
-              <Link to="/profile" onClick={() => setIsMenuOpen(false)} className="flex items-center space-x-3 px-2 py-2 rounded-lg hover:bg-gray-50">
+              <Link to="/profile" onClick={() => setIsMenuOpen(false)} className="flex items-center space-x-3 px-2 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-800 dark:text-white">
                 <FaUser size={18} /><span>Profile</span>
               </Link>
               {user?.role === 'ADMIN' && (
-                <Link to="/admin" onClick={() => setIsMenuOpen(false)} className="flex items-center space-x-3 px-2 py-2 rounded-lg text-yellow-600 hover:bg-yellow-50">
+                <Link to="/admin" onClick={() => setIsMenuOpen(false)} className="flex items-center space-x-3 px-2 py-2 rounded-lg text-yellow-600 dark:text-yellow-400 hover:bg-yellow-50 dark:hover:bg-yellow-900">
                   <FaCrown size={18} /><span>Admin Panel</span>
                 </Link>
               )}
-              <button onClick={handleLogout} className="flex items-center space-x-3 px-2 py-2 rounded-lg text-red-600 hover:bg-red-50">
+              <button onClick={toggleDarkMode} className="flex items-center space-x-3 px-2 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-800 dark:text-white">
+                {darkMode ? <FaSun size={18} /> : <FaMoon size={18} />}<span>{darkMode ? 'Light Mode' : 'Dark Mode'}</span>
+              </button>
+              <button onClick={handleLogout} className="flex items-center space-x-3 px-2 py-2 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900">
                 <FaSignOutAlt size={18} /><span>Logout</span>
               </button>
             </div>
