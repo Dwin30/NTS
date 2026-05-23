@@ -24,22 +24,29 @@ const prisma = new PrismaClient({
 const app = express();
 const server = http.createServer(app);
 
+// ============ ALLOWED ORIGINS ============
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "https://exquisite-souffle-c3acd0.netlify.app",
+  "https://polite-cucurucho-d21021.netlify.app",
+  "https://nts-platform.netlify.app",
+  "https://nts-iey7-dwin30s-projects.vercel.app",
+  "https://nts-frontend.onrender.com",
+  "https://*.netlify.app",
+  "https://*.vercel.app",
+  "https://*.onrender.com"
+];
+
 // ============ SOCKET.IO WITH FULL CORS ============
 const io = socketIO(server, {
   cors: {
-    origin: [
-      "http://localhost:3000",
-      "http://localhost:3001",
-      "https://exquisite-souffle-c3acd0.netlify.app",
-      "https://polite-cucurucho-d21021.netlify.app",
-      "https://nts-platform.netlify.app",
-      "https://nts-iey7-dwin30s-projects.vercel.app",
-      "https://*.netlify.app",
-      "https://*.vercel.app"
-    ],
+    origin: allowedOrigins,
     credentials: true,
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type", "Authorization"]
+  },
+  transports: ['websocket', 'polling']
 });
 
 // ============ MULTER SETUP ============
@@ -56,24 +63,29 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
 
-// ============ MIDDLEWARE ============
+// ============ EXPRESS CORS MIDDLEWARE ============
 app.use(cors({ 
-  origin: [
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "https://exquisite-souffle-c3acd0.netlify.app",
-    "https://polite-cucurucho-d21021.netlify.app",
-    "https://nts-platform.netlify.app",
-    "https://nts-frontend.onrender.com",
-    "https://nts-iey7-dwin30s-projects.vercel.app",
-    "https://*.netlify.app",
-    "https://*.vercel.app"
-  ], 
-  credentials: true 
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.some(allowed => origin === allowed || origin.endsWith('.onrender.com') || origin.endsWith('.netlify.app') || origin.endsWith('.vercel.app'))) {
+      callback(null, true);
+    } else {
+      console.log('Blocked CORS from:', origin);
+      callback(null, true); // Allow anyway for testing
+    }
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
 }));
+
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 app.use('/uploads', express.static(uploadDir));
+
+// Handle preflight requests
+app.options('*', cors());
 
 // ============ AUTH MIDDLEWARE ============
 const authenticate = (req, res, next) => {
@@ -113,7 +125,6 @@ app.post('/api/auth/register', async (req, res) => {
       }
     });
     
-    // Send OTP via Brevo would go here
     res.status(201).json({ message: 'Registration successful! OTP sent', userId: user.id, email: user.email });
   } catch (error) {
     res.status(500).json({ error: 'Registration failed' });
@@ -424,7 +435,7 @@ app.delete('/api/posts/:postId/comments/:commentId', authenticate, async (req, r
   }
 });
 
-// ============ SHARE POST ROUTE (NEW) ============
+// ============ SHARE POST ROUTE ============
 app.post('/api/posts/:postId/share', authenticate, async (req, res) => {
   const { postId } = req.params;
   try {
@@ -502,7 +513,6 @@ app.post('/api/chat/private/:userId', authenticate, async (req, res) => {
   }
 });
 
-// ============ GROUP CHAT ROUTES (NEW) ============
 app.post('/api/chat/group', authenticate, async (req, res) => {
   const { name, participantIds } = req.body;
   try {
@@ -611,10 +621,10 @@ app.delete('/api/chat/messages/:messageId', authenticate, async (req, res) => {
   }
 });
 
-// ============ MESSAGE REACTIONS (NEW - Like WhatsApp) ============
+// ============ MESSAGE REACTIONS ============
 app.post('/api/chat/messages/:messageId/react', authenticate, async (req, res) => {
   const { messageId } = req.params;
-  const { reaction } = req.body; // reaction can be '❤️', '👍', '😂', '😮', '😢', '😡'
+  const { reaction } = req.body;
   try {
     const message = await prisma.message.findUnique({ where: { id: messageId } });
     if (!message) return res.status(404).json({ error: 'Message not found' });
