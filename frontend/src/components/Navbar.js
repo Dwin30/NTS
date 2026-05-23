@@ -5,7 +5,8 @@ import { useTheme } from '../App';
 import { io } from 'socket.io-client';
 import { FaCode, FaHome, FaNewspaper, FaComment, FaBriefcase, FaUser, FaSignOutAlt, FaCrown, FaBars, FaTimes, FaBook, FaMoon, FaSun } from 'react-icons/fa';
 
-const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'https://nts-backend-409a.onrender.com';
+// Use the new backend URL
+const SOCKET_URL = 'https://nts-backend-new.onrender.com';
 
 const Navbar = () => {
   const { user, logout, unreadCount, setUnreadCount, token } = useAuthStore();
@@ -15,9 +16,18 @@ const Navbar = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   
   useEffect(() => {
-    if (!user) return;
+    if (!user || !token) return;
     
-    const newSocket = io(SOCKET_URL, { auth: { token } });
+    const newSocket = io(SOCKET_URL, { 
+      auth: { token },
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 5,
+    });
+    
+    newSocket.on('connect', () => {
+      console.log('Navbar Socket connected');
+    });
     
     newSocket.on('message:received', () => {
       fetchUnreadCount();
@@ -27,7 +37,9 @@ const Navbar = () => {
       fetchUnreadCount();
     });
     
-    return () => newSocket.disconnect();
+    return () => {
+      newSocket.disconnect();
+    };
   }, [user, token]);
   
   const fetchUnreadCount = async () => {

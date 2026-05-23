@@ -3,16 +3,17 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { io } from 'socket.io-client';
 import { 
-  FaPaperPlane, FaSearch, FaUserPlus, FaComment, FaTrash, FaEdit, FaReply, 
-  FaTimes, FaPaperclip, FaArrowLeft, FaVideo as FaVideoCall, 
-  FaMicrophone, FaMicrophoneSlash, FaVideoSlash, FaPhoneSlash, 
-  FaArrowDown, FaPlay, FaPause, FaPhone, FaPhoneAlt, FaStop, FaSmile,
-  FaCheck, FaCheckDouble, FaRegSmile, FaImage, FaFile, FaCamera, FaUserCircle
+  FaPaperPlane, FaSearch, FaUserPlus, FaComment, FaCheck, FaCheckDouble, 
+  FaTrash, FaEdit, FaReply, FaTimes, FaPaperclip,
+  FaArrowLeft, FaVideo as FaVideoCall, FaMicrophone, FaMicrophoneSlash,
+  FaVideoSlash, FaPhoneSlash, FaArrowDown, FaPlay, FaPause,
+  FaPhone, FaPhoneAlt, FaStop, FaSmile
 } from 'react-icons/fa';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 
-const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'https://nts-backend-409a.onrender.com';
+// Use the new backend URL
+const SOCKET_URL = 'https://nts-backend-new.onrender.com';
 
 const Messages = () => {
   const { user, token, setUnreadCount } = useAuthStore();
@@ -80,10 +81,33 @@ const Messages = () => {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
   
+  // Socket connection with proper reconnection settings
   useEffect(() => {
     if (!token || !user) return;
     
-    const newSocket = io(SOCKET_URL, { auth: { token } });
+    const newSocket = io(SOCKET_URL, { 
+      auth: { token },
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
+    });
+    
+    newSocket.on('connect', () => {
+      console.log('✅ Socket connected to backend');
+      newSocket.emit('user:online', { userId: user.id });
+    });
+    
+    newSocket.on('connect_error', (error) => {
+      console.error('Socket connection error:', error);
+    });
+    
+    newSocket.on('disconnect', (reason) => {
+      console.log('Socket disconnected:', reason);
+    });
+    
     setSocket(newSocket);
     fetchChats();
     
@@ -93,7 +117,12 @@ const Messages = () => {
       if (isMobile) setShowChatArea(true);
     }
     
-    return () => newSocket.disconnect();
+    return () => {
+      if (newSocket) {
+        newSocket.emit('user:offline', { userId: user.id });
+        newSocket.disconnect();
+      }
+    };
   }, [token, user]);
   
   useEffect(() => {
@@ -135,7 +164,6 @@ const Messages = () => {
       if (other?.id === userId) setIsTyping(false);
     });
     
-    // Call events
     socket.on('call:incoming', (data) => {
       setIncomingCall(data);
       const audio = new Audio('/ringtone.mp3');
@@ -215,7 +243,6 @@ const Messages = () => {
       setMessages(res.data.messages || []);
       scrollToBottom();
       
-      // Mark unread messages as read
       const unreadMessages = (res.data.messages || []).filter(m => !m.isRead && m.senderId !== user.id);
       unreadMessages.forEach(msg => {
         api.post(`/chat/messages/${msg.id}/read`);
@@ -432,7 +459,6 @@ const Messages = () => {
     setEditingMessage(null);
   };
   
-  // Video Call
   const initiateCall = async (isVideo = true) => {
     const other = getOtherParticipant();
     if (!other) return toast.error('User not found');
@@ -563,7 +589,6 @@ const Messages = () => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
   
-  // Message status - shows "Seen" or "Delivered" or "Sent" as text (Instagram style)
   const MessageStatus = ({ message, isOwn }) => {
     if (!isOwn) return null;
     if (message.isRead) return <span className="text-[10px] text-gray-400">Seen</span>;
@@ -655,7 +680,7 @@ const Messages = () => {
                 />
               </div>
               {searchResults.length > 0 && (
-                <div className="absolute mt-1 w-80 bg-white dark:bg-gray-800 rounded-xl shadow-lg border dark:border-gray-700 z-10">
+                <div className="absolute mt-1 w-80 bg-white dark:bg-gray-800 rounded-xl shadow-lg border dark:border-gray-700 z-10 max-h-60 overflow-y-auto">
                   {searchResults.map(user => (
                     <button
                       key={user.id}
@@ -897,7 +922,7 @@ const Messages = () => {
               </button>
             )}
             
-            {/* Message Input - Clean, no help text */}
+            {/* Message Input */}
             <div className="bg-white dark:bg-gray-800 border-t dark:border-gray-700 px-4 py-3">
               <div className="flex items-center gap-2">
                 <button
