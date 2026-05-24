@@ -1,12 +1,10 @@
 import axios from 'axios';
 
-// Use the new backend URL
 const API_URL = 'https://nts-backend-new.onrender.com/api';
 
 const api = axios.create({
   baseURL: API_URL,
   headers: { 'Content-Type': 'application/json' },
-  withCredentials: true,
   timeout: 30000,
 });
 
@@ -22,7 +20,7 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Handle 401 errors
+// Handle 401 errors - redirect to login
 api.interceptors.response.use(
   (response) => response,
   (error) => {

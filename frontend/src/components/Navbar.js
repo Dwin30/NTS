@@ -5,7 +5,6 @@ import { useTheme } from '../App';
 import { io } from 'socket.io-client';
 import { FaCode, FaHome, FaNewspaper, FaComment, FaBriefcase, FaUser, FaSignOutAlt, FaCrown, FaBars, FaTimes, FaBook, FaMoon, FaSun } from 'react-icons/fa';
 
-// Use the new backend URL
 const SOCKET_URL = 'https://nts-backend-new.onrender.com';
 
 const Navbar = () => {
