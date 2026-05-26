@@ -1,137 +1,78 @@
-/* ============================================
-   index.css - Complete Styles with Dark Mode
-   ============================================ */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  * {
-    @apply transition-colors duration-200;
-  }
-  
-  body {
-    @apply bg-gray-50 dark:bg-gray-900;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-  }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-@layer components {
-  .message-item {
-    animation: fadeInUp 0.2s ease-out;
-  }
-  
-  .reaction-animation {
-    animation: reactionPop 0.3s ease-out;
-  }
-  
-  .typing-indicator {
-    display: flex;
-    gap: 4px;
-    padding: 8px 12px;
-  }
-  
-  .typing-indicator span {
-    width: 8px;
-    height: 8px;
-    background-color: #9ca3af;
-    border-radius: 50%;
-    animation: typingBounce 1.4s infinite ease-in-out;
-  }
-  
-  .typing-indicator span:nth-child(1) { animation-delay: 0s; }
-  .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-  .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+/* Dark Mode Scrollbar */
+.dark ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
 
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.dark ::-webkit-scrollbar-track {
+  background: #1f2937;
+  border-radius: 10px;
 }
 
-@keyframes reactionPop {
-  0% {
-    transform: scale(0);
-    opacity: 0;
-  }
-  50% {
-    transform: scale(1.2);
-  }
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
+.dark ::-webkit-scrollbar-thumb {
+  background: #4b5563;
+  border-radius: 10px;
 }
 
-@keyframes typingBounce {
-  0%, 60%, 100% {
-    transform: translateY(0);
-  }
-  30% {
-    transform: translateY(-6px);
-  }
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
 }
 
-/* Scrollbar Styles */
+/* Light Mode Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  @apply bg-gray-100 dark:bg-gray-800 rounded-full;
+  background: #f1f1f1;
+  border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply bg-gray-400 dark:bg-gray-600 rounded-full;
+  background: #c1c1c1;
+  border-radius: 10px;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  @apply bg-gray-500 dark:bg-gray-500;
+/* Message Reaction Animation */
+@keyframes reactionPop {
+  0% { transform: scale(0); opacity: 0; }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); opacity: 1; }
 }
 
-/* Dark Mode Specific Overrides */
-.dark input,
-.dark textarea,
-.dark select {
-  @apply bg-gray-700 border-gray-600 text-white;
-}
-
-.dark input::placeholder,
-.dark textarea::placeholder {
-  @apply text-gray-400;
-}
-
-/* PWA Install Button */
-.install-pwa-btn {
-  @apply fixed bottom-20 right-4 bg-green-600 text-white rounded-full px-4 py-2 shadow-lg z-50 text-sm font-medium animate-bounce;
-}
-
-/* Mobile Responsive */
-@media (max-width: 768px) {
-  .message-text {
-    font-size: 14px;
-  }
+.reaction-animation {
+  animation: reactionPop 0.3s ease-out;
 }
 
 /* Loading Spinner */
-.loading-spinner {
-  @apply animate-spin rounded-full h-12 w-12 border-b-2 border-green-600;
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
-/* Modal Backdrop */
-.modal-backdrop {
-  @apply fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50;
+.animate-spin {
+  animation: spin 1s linear infinite;
 }
 
-.modal-content {
-  @apply bg-white dark:bg-gray-800 rounded-2xl p-6 max-w-md w-full mx-4;
+/* Call Animation */
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+.animate-bounce {
+  animation: bounce 0.5s infinite;
 }
