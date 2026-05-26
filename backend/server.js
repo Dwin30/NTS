@@ -16,120 +16,85 @@ const prisma = new PrismaClient();
 const app = express();
 const server = http.createServer(app);
 
-// ============ CORS CONFIGURATION ============
+// CORS
 const allowedOrigins = [
   "http://localhost:3000",
-  "http://localhost:3001",
   "https://nts-frontend.onrender.com",
   "https://nts-backend-409a.onrender.com",
-  "https://*.onrender.com",
-  "https://*.netlify.app",
-  "https://*.vercel.app"
+  "https://*.onrender.com"
 ];
 
 const io = socketIO(server, {
-  cors: {
-    origin: allowedOrigins,
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE"]
-  },
+  cors: { origin: allowedOrigins, credentials: true },
   transports: ['websocket', 'polling']
 });
 
-// ============ MULTER SETUP ============
+// Middleware
+app.use(cors({ origin: allowedOrigins, credentials: true }));
+app.use(express.json({ limit: '100mb' }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// File upload
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
+    cb(null, Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname));
   }
 });
-
 const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
 
-// ============ MIDDLEWARE ============
-app.use(cors({ origin: allowedOrigins, credentials: true }));
-app.use(express.json({ limit: '100mb' }));
-app.use(express.urlencoded({ extended: true, limit: '100mb' }));
-app.use('/uploads', express.static(uploadDir));
-app.options('*', cors());
-
-// ============ AUTH MIDDLEWARE ============
+// Auth middleware
 const authenticate = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: 'No token provided' });
-  
-  const token = authHeader.split(' ')[1];
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'No token' });
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'nts_secret_key_2024');
-    req.user = decoded;
+    req.user = jwt.verify(token, process.env.JWT_SECRET || 'secret');
     next();
   } catch (error) {
-    return res.status(401).json({ error: 'Invalid token' });
+    res.status(401).json({ error: 'Invalid token' });
   }
 };
 
-// ============ AUTH ROUTES ============
-app.post('/api/auth/register', async (req, res) => {
-  try {
-    const { email, fullName, password, role, phone, school } = req.body;
-    const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) return res.status(400).json({ error: 'Email already registered' });
-    
-    const passwordHash = await bcrypt.hash(password, 10);
-    const user = await prisma.user.create({
-      data: { email, fullName, passwordHash, role: role || 'STUDENT', phone, school, isVerified: true }
-    });
-    
-    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET || 'nts_secret_key_2024', { expiresIn: '7d' });
-    res.json({ token, user: { id: user.id, fullName: user.fullName, email: user.email, role: user.role, avatar: user.avatar, bio: user.bio, phone: user.phone, school: user.school } });
-  } catch (error) {
-    res.status(500).json({ error: 'Registration failed' });
-  }
-});
-
+// Auth routes
 app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body;
   try {
-    const { email, password } = req.body;
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-    
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
-    
-    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET || 'nts_secret_key_2024', { expiresIn: '7d' });
-    res.json({ token, user: { id: user.id, fullName: user.fullName, email: user.email, role: user.role, avatar: user.avatar, bio: user.bio, phone: user.phone, school: user.school } });
+    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET || 'secret', { expiresIn: '7d' });
+    res.json({ token, user: { id: user.id, fullName: user.fullName, email: user.email, role: user.role, avatar: user.avatar } });
   } catch (error) {
     res.status(500).json({ error: 'Login failed' });
   }
 });
 
-app.post('/api/auth/change-password', authenticate, async (req, res) => {
-  const { currentPassword, newPassword } = req.body;
+app.post('/api/auth/register', async (req, res) => {
+  const { email, fullName, password, role, phone, school } = req.body;
   try {
-    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-    const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
-    if (!isValid) return res.status(400).json({ error: 'Current password is incorrect' });
-    
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await prisma.user.update({ where: { id: req.user.id }, data: { passwordHash: hashedPassword } });
-    res.json({ message: 'Password changed successfully' });
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing) return res.status(400).json({ error: 'Email exists' });
+    const passwordHash = await bcrypt.hash(password, 10);
+    const user = await prisma.user.create({
+      data: { email, fullName, passwordHash, role: role || 'STUDENT', phone, school, isVerified: true }
+    });
+    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET || 'secret', { expiresIn: '7d' });
+    res.json({ token, user: { id: user.id, fullName: user.fullName, email: user.email, role: user.role } });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to change password' });
+    res.status(500).json({ error: 'Registration failed' });
   }
 });
 
-// ============ FILE UPLOAD ============
+// Upload
 app.post('/api/upload', authenticate, upload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
-  res.json({ url: fileUrl, mimetype: req.file.mimetype });
+  if (!req.file) return res.status(400).json({ error: 'No file' });
+  res.json({ url: `https://${req.get('host')}/uploads/${req.file.filename}`, mimetype: req.file.mimetype });
 });
 
-// ============ CHAT ROUTES ============
+// Chat routes
 app.get('/api/chat', authenticate, async (req, res) => {
   try {
     const chats = await prisma.chat.findMany({
@@ -141,7 +106,7 @@ app.get('/api/chat', authenticate, async (req, res) => {
     });
     res.json(chats);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json([]);
   }
 });
 
@@ -156,121 +121,52 @@ app.post('/api/chat/private/:userId', authenticate, async (req, res) => {
           { participants: { some: { userId } } }
         ]
       },
-      include: { participants: { include: { user: { select: { id: true, fullName: true, avatar: true, role: true } } } } }
+      include: { participants: { include: { user: { select: { id: true, fullName: true, avatar: true } } } } }
     });
-    
     if (!chat) {
       chat = await prisma.chat.create({
         data: {
           isGroup: false,
           participants: { create: [{ userId: req.user.id }, { userId }] }
         },
-        include: { participants: { include: { user: { select: { id: true, fullName: true, avatar: true, role: true } } } } }
+        include: { participants: { include: { user: { select: { id: true, fullName: true, avatar: true } } } } }
       });
     }
     res.json(chat);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to start conversation' });
-  }
-});
-
-app.post('/api/chat/group', authenticate, async (req, res) => {
-  const { name, participantIds } = req.body;
-  try {
-    const chat = await prisma.chat.create({
-      data: {
-        name,
-        isGroup: true,
-        participants: { create: [{ userId: req.user.id }, ...participantIds.map(id => ({ userId: id }))] }
-      },
-      include: { participants: { include: { user: { select: { id: true, fullName: true, avatar: true, role: true } } } } }
-    });
-    res.json(chat);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to create group' });
+    res.status(500).json({ error: 'Failed to start chat' });
   }
 });
 
 app.get('/api/chat/:chatId/messages', authenticate, async (req, res) => {
   const { chatId } = req.params;
-  const { limit = 50, before } = req.query;
   try {
-    const where = { chatId, isDeleted: false };
-    if (before) where.createdAt = { lt: new Date(before) };
-    
     const messages = await prisma.message.findMany({
-      where,
-      include: {
-        sender: { select: { id: true, fullName: true, avatar: true } },
-        replyTo: { include: { sender: { select: { id: true, fullName: true } } } }
-      },
-      orderBy: { createdAt: 'desc' },
-      take: parseInt(limit)
+      where: { chatId, isDeleted: false },
+      include: { sender: { select: { id: true, fullName: true, avatar: true } } },
+      orderBy: { createdAt: 'asc' }
     });
-    res.json({ messages: messages.reverse(), hasMore: messages.length === parseInt(limit) });
+    res.json({ messages });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ messages: [] });
   }
 });
 
 app.post('/api/chat/messages', authenticate, async (req, res) => {
-  const { chatId, content, receiverId, fileUrl, fileType, fileName, replyToId } = req.body;
+  const { chatId, content, receiverId, fileUrl, fileType, replyToId } = req.body;
   try {
     const message = await prisma.message.create({
-      data: { content: content || '', senderId: req.user.id, receiverId, chatId, fileUrl, fileType, fileName, replyToId, isRead: false, isDeleted: false },
-      include: { sender: { select: { id: true, fullName: true, avatar: true } }, replyTo: { include: { sender: { select: { id: true, fullName: true } } } } }
+      data: { content: content || '', senderId: req.user.id, receiverId, chatId, fileUrl, fileType, replyToId, isRead: false },
+      include: { sender: { select: { id: true, fullName: true, avatar: true } } }
     });
-    
     io.to(`user:${receiverId}`).emit('message:received', message);
-    if (chatId) {
-      const chat = await prisma.chat.findUnique({ where: { id: chatId }, include: { participants: true } });
-      chat?.participants.forEach(p => {
-        if (p.userId !== req.user.id) io.to(`user:${p.userId}`).emit('message:received', message);
-      });
-    }
     res.status(201).json(message);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.put('/api/chat/messages/:messageId', authenticate, async (req, res) => {
-  const { messageId } = req.params;
-  const { content } = req.body;
-  try {
-    const message = await prisma.message.update({
-      where: { id: messageId },
-      data: { content, isEdited: true, editedAt: new Date() },
-      include: { sender: { select: { id: true, fullName: true, avatar: true } } }
-    });
-    io.to(`user:${message.receiverId}`).emit('message:updated', message);
-    res.json(message);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/chat/messages/:messageId', authenticate, async (req, res) => {
-  const { messageId } = req.params;
-  const { forEveryone = true } = req.body;
-  try {
-    const message = await prisma.message.findUnique({ where: { id: messageId } });
-    if (message.senderId !== req.user.id && req.user.role !== 'ADMIN') return res.status(403).json({ error: 'Not authorized' });
-    
-    if (forEveryone) {
-      await prisma.message.update({ where: { id: messageId }, data: { isDeleted: true, deletedBy: req.user.id } });
-      io.to(`user:${message.receiverId}`).emit('message:deleted', { messageId });
-    } else {
-      // Delete for me only - just hide from this user (implement with user-specific visibility)
-      await prisma.message.update({ where: { id: messageId }, data: { isDeleted: true, deletedBy: req.user.id } });
-    }
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/chat/messages/:messageId/read', authenticate, async (req, res) => {
+app.put('/api/chat/messages/:messageId/read', authenticate, async (req, res) => {
   const { messageId } = req.params;
   try {
     await prisma.message.update({ where: { id: messageId }, data: { isRead: true, readAt: new Date() } });
@@ -278,47 +174,11 @@ app.post('/api/chat/messages/:messageId/read', authenticate, async (req, res) =>
     io.to(`user:${message.senderId}`).emit('message:read', { messageId });
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ success: false });
   }
 });
 
-app.post('/api/chat/messages/:messageId/react', authenticate, async (req, res) => {
-  const { messageId } = req.params;
-  const { reaction } = req.body;
-  try {
-    const message = await prisma.message.findUnique({ where: { id: messageId } });
-    let reactions = message.reactions ? JSON.parse(message.reactions) : {};
-    if (reactions[req.user.id] === reaction) {
-      delete reactions[req.user.id];
-    } else {
-      reactions[req.user.id] = reaction;
-    }
-    const updatedMessage = await prisma.message.update({
-      where: { id: messageId },
-      data: { reactions: JSON.stringify(reactions) }
-    });
-    io.to(`user:${message.senderId}`).emit('message:reacted', { messageId, reactions });
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/chat/search', authenticate, async (req, res) => {
-  const { q } = req.query;
-  if (!q || q.length < 2) return res.json([]);
-  try {
-    const users = await prisma.user.findMany({
-      where: { id: { not: req.user.id }, fullName: { contains: q, mode: 'insensitive' } },
-      select: { id: true, fullName: true, avatar: true, role: true }
-    });
-    res.json(users);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============ POST FEED ROUTES ============
+// Feed routes
 app.get('/api/posts/feed', authenticate, async (req, res) => {
   try {
     const posts = await prisma.post.findMany({
@@ -327,16 +187,14 @@ app.get('/api/posts/feed', authenticate, async (req, res) => {
       orderBy: { createdAt: 'desc' },
       take: 50
     });
-    
     const postsWithLikes = await Promise.all(posts.map(async (post) => {
       const likeCount = await prisma.like.count({ where: { postId: post.id } });
-      const commentCount = await prisma.comment.count({ where: { postId: post.id, isDeleted: false } });
       const userLike = await prisma.like.findFirst({ where: { userId: req.user.id, postId: post.id } });
-      return { ...post, isLiked: !!userLike, likesCount: likeCount, commentsCount: commentCount };
+      return { ...post, isLiked: !!userLike, likesCount: likeCount };
     }));
     res.json(postsWithLikes);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json([]);
   }
 });
 
@@ -345,41 +203,13 @@ app.post('/api/posts', authenticate, async (req, res) => {
   try {
     const post = await prisma.post.create({
       data: { content, imageUrl: imageUrl || null, authorId: req.user.id },
-      include: { author: { select: { id: true, fullName: true, avatar: true, role: true } } }
+      include: { author: { select: { id: true, fullName: true, avatar: true } } }
     });
     await prisma.user.update({ where: { id: req.user.id }, data: { postsCount: { increment: 1 } } });
     io.emit('post:created', post);
     res.status(201).json(post);
   } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put('/api/posts/:postId', authenticate, async (req, res) => {
-  const { postId } = req.params;
-  const { content } = req.body;
-  try {
-    const post = await prisma.post.update({
-      where: { id: postId },
-      data: { content, updatedAt: new Date() },
-      include: { author: { select: { id: true, fullName: true, avatar: true, role: true } } }
-    });
-    io.emit('post:edited', post);
-    res.json(post);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/posts/:postId', authenticate, async (req, res) => {
-  const { postId } = req.params;
-  try {
-    await prisma.post.update({ where: { id: postId }, data: { isDeleted: true, deletedAt: new Date() } });
-    await prisma.user.update({ where: { id: req.user.id }, data: { postsCount: { decrement: 1 } } });
-    io.emit('post:deleted', postId);
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Failed to create post' });
   }
 });
 
@@ -395,115 +225,21 @@ app.post('/api/posts/:postId/like', authenticate, async (req, res) => {
       res.json({ liked: true });
     }
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ liked: false });
   }
 });
 
-app.post('/api/posts/:postId/comments', authenticate, async (req, res) => {
-  const { postId } = req.params;
-  const { content } = req.body;
-  try {
-    const comment = await prisma.comment.create({
-      data: { content, authorId: req.user.id, postId },
-      include: { author: { select: { id: true, fullName: true, avatar: true } } }
-    });
-    await prisma.post.update({ where: { id: postId }, data: { commentsCount: { increment: 1 } } });
-    io.emit('comment:added', { postId, comment });
-    res.status(201).json(comment);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/posts/:postId/comments', authenticate, async (req, res) => {
-  const { postId } = req.params;
-  try {
-    const comments = await prisma.comment.findMany({
-      where: { postId, isDeleted: false },
-      include: { author: { select: { id: true, fullName: true, avatar: true } } },
-      orderBy: { createdAt: 'asc' }
-    });
-    res.json(comments);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put('/api/posts/:postId/comments/:commentId', authenticate, async (req, res) => {
-  const { postId, commentId } = req.params;
-  const { content } = req.body;
-  try {
-    const comment = await prisma.comment.update({
-      where: { id: commentId },
-      data: { content, isEdited: true, editedAt: new Date() },
-      include: { author: { select: { id: true, fullName: true, avatar: true } } }
-    });
-    io.emit('comment:edited', { postId, comment });
-    res.json(comment);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/posts/:postId/comments/:commentId', authenticate, async (req, res) => {
-  const { postId, commentId } = req.params;
-  try {
-    await prisma.comment.update({ where: { id: commentId }, data: { isDeleted: true, deletedAt: new Date() } });
-    await prisma.post.update({ where: { id: postId }, data: { commentsCount: { decrement: 1 } } });
-    io.emit('comment:deleted', { postId, commentId });
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/posts/:postId/share', authenticate, async (req, res) => {
-  const { postId } = req.params;
-  try {
-    const originalPost = await prisma.post.findUnique({ where: { id: postId } });
-    const sharedPost = await prisma.post.create({
-      data: {
-        content: `Shared a post: ${originalPost.content.substring(0, 100)}...`,
-        imageUrl: originalPost.imageUrl,
-        authorId: req.user.id,
-        isShared: true,
-        originalPostId: postId
-      },
-      include: { author: { select: { id: true, fullName: true, avatar: true, role: true } } }
-    });
-    await prisma.user.update({ where: { id: req.user.id }, data: { postsCount: { increment: 1 } } });
-    await prisma.post.update({ where: { id: postId }, data: { sharesCount: { increment: 1 } } });
-    io.emit('post:created', sharedPost);
-    res.status(201).json(sharedPost);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============ USER PROFILE ============
+// Profile routes
 app.get('/api/users/profile/:userId', authenticate, async (req, res) => {
   const { userId } = req.params;
   try {
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, fullName: true, email: true, role: true, avatar: true, bio: true, phone: true, school: true, postsCount: true, followersCount: true, followingCount: true, createdAt: true }
+      select: { id: true, fullName: true, email: true, role: true, avatar: true, bio: true, phone: true, school: true, postsCount: true, createdAt: true }
     });
     res.json(user);
   } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put('/api/users/profile', authenticate, async (req, res) => {
-  const { fullName, bio, phone, school, avatar } = req.body;
-  try {
-    const updated = await prisma.user.update({
-      where: { id: req.user.id },
-      data: { fullName, bio, phone, school, avatar }
-    });
-    res.json(updated);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(404).json({ error: 'User not found' });
   }
 });
 
@@ -516,94 +252,27 @@ app.get('/api/users/suggested', authenticate, async (req, res) => {
     });
     res.json(users);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json([]);
   }
 });
 
-app.post('/api/users/:userId/follow', authenticate, async (req, res) => {
-  const { userId } = req.params;
-  try {
-    const existing = await prisma.follow.findFirst({ where: { followerId: req.user.id, followingId: userId } });
-    if (existing) {
-      await prisma.follow.delete({ where: { id: existing.id } });
-      await prisma.user.update({ where: { id: req.user.id }, data: { followingCount: { decrement: 1 } } });
-      await prisma.user.update({ where: { id: userId }, data: { followersCount: { decrement: 1 } } });
-      res.json({ following: false });
-    } else {
-      await prisma.follow.create({ data: { followerId: req.user.id, followingId: userId } });
-      await prisma.user.update({ where: { id: req.user.id }, data: { followingCount: { increment: 1 } } });
-      await prisma.user.update({ where: { id: userId }, data: { followersCount: { increment: 1 } } });
-      res.json({ following: true });
-    }
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============ INTERNSHIPS ============
-app.get('/api/internships', authenticate, async (req, res) => {
-  try {
-    const internships = await prisma.internship.findMany({ orderBy: { createdAt: 'desc' } });
-    res.json(internships);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/internships/:id/apply', authenticate, async (req, res) => {
-  const { id } = req.params;
-  try {
-    const existing = await prisma.internshipApplication.findFirst({ where: { studentId: req.user.id, internshipId: id } });
-    if (existing) return res.status(400).json({ error: 'Already applied' });
-    const application = await prisma.internshipApplication.create({ data: { studentId: req.user.id, internshipId: id } });
-    res.status(201).json(application);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/my-applications', authenticate, async (req, res) => {
-  try {
-    const apps = await prisma.internshipApplication.findMany({ where: { studentId: req.user.id }, include: { internship: true } });
-    res.json(apps);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============ ADMIN ROUTES ============
-app.get('/api/admin/users', authenticate, async (req, res) => {
-  if (req.user.role !== 'ADMIN') return res.status(403).json({ error: 'Admin only' });
-  const users = await prisma.user.findMany();
-  res.json({ users });
-});
-
-app.put('/api/admin/users/:userId/role', authenticate, async (req, res) => {
-  if (req.user.role !== 'ADMIN') return res.status(403).json({ error: 'Admin only' });
-  const { userId } = req.params;
-  const { role } = req.body;
-  const updated = await prisma.user.update({ where: { id: userId }, data: { role } });
-  res.json(updated);
-});
-
+// Dashboard stats
 app.get('/api/dashboard/stats', authenticate, async (req, res) => {
-  const [students, trainers, posts, internships] = await Promise.all([
+  const [students, trainers, posts] = await Promise.all([
     prisma.user.count({ where: { role: 'STUDENT' } }),
     prisma.user.count({ where: { role: 'TRAINER' } }),
-    prisma.post.count({ where: { isDeleted: false } }),
-    prisma.internship.count()
+    prisma.post.count({ where: { isDeleted: false } })
   ]);
-  res.json({ students, trainers, posts, internships });
+  res.json({ students, trainers, posts, internships: 0 });
 });
 
-// ============ SOCKET.IO ============
+// Socket.IO
 const onlineUsers = new Map();
-
 io.use((socket, next) => {
   const token = socket.handshake.auth.token;
-  if (!token) return next(new Error('Authentication required'));
+  if (!token) return next(new Error('No token'));
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'nts_secret_key_2024');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
     socket.userId = decoded.id;
     next();
   } catch (err) {
@@ -612,7 +281,7 @@ io.use((socket, next) => {
 });
 
 io.on('connection', (socket) => {
-  console.log(`✅ User ${socket.userId} connected`);
+  console.log(`User ${socket.userId} connected`);
   onlineUsers.set(socket.userId, socket.id);
   socket.join(`user:${socket.userId}`);
 
@@ -620,20 +289,6 @@ io.on('connection', (socket) => {
     const receiverSocketId = onlineUsers.get(data.receiverId);
     if (receiverSocketId) {
       io.to(receiverSocketId).emit('message:received', data.message);
-    }
-  });
-
-  socket.on('message:read', (data) => {
-    const senderSocketId = onlineUsers.get(data.senderId);
-    if (senderSocketId) {
-      io.to(senderSocketId).emit('message:read', { messageId: data.messageId });
-    }
-  });
-
-  socket.on('message:react', (data) => {
-    const receiverSocketId = onlineUsers.get(data.to);
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit('message:reacted', { messageId: data.messageId, reaction: data.reaction });
     }
   });
 
@@ -651,70 +306,24 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Video Call Signaling
-  socket.on('call:offer', (data) => {
-    const receiverSocketId = onlineUsers.get(data.to);
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit('call:incoming', {
-        fromId: socket.userId,
-        fromName: data.fromName,
-        offer: data.offer,
-        isVideo: data.isVideo
-      });
-    }
-  });
-
-  socket.on('call:answer', (data) => {
-    const callerSocketId = onlineUsers.get(data.to);
-    if (callerSocketId) {
-      io.to(callerSocketId).emit('call:accepted', { answer: data.answer });
-    }
-  });
-
-  socket.on('call:ice-candidate', (data) => {
-    const receiverSocketId = onlineUsers.get(data.to);
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit('call:ice-candidate', { candidate: data.candidate });
-    }
-  });
-
-  socket.on('call:reject', (data) => {
-    const callerSocketId = onlineUsers.get(data.to);
-    if (callerSocketId) {
-      io.to(callerSocketId).emit('call:rejected');
-    }
-  });
-
-  socket.on('call:end', (data) => {
-    const receiverSocketId = onlineUsers.get(data.to);
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit('call:ended');
-    }
-  });
-
   socket.on('disconnect', () => {
-    console.log(`❌ User ${socket.userId} disconnected`);
+    console.log(`User ${socket.userId} disconnected`);
     onlineUsers.delete(socket.userId);
   });
 });
 
-// ============ CREATE DEFAULT ADMIN ============
+// Create default admin
 async function createDefaultAdmin() {
   const existing = await prisma.user.findUnique({ where: { email: 'admin@nts.rw' } });
   if (!existing) {
     const passwordHash = await bcrypt.hash('Admin123', 10);
     await prisma.user.create({ data: { email: 'admin@nts.rw', fullName: 'Admin', passwordHash, role: 'ADMIN', isVerified: true } });
-    console.log('✅ Admin created: admin@nts.rw / Admin123');
+    console.log('✅ Admin created');
   }
 }
 
-// ============ START SERVER ============
+// Start server
 const PORT = process.env.PORT || 5000;
-
-async function startServer() {
-  await prisma.$connect();
-  await createDefaultAdmin();
+createDefaultAdmin().then(() => {
   server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
-}
-
-startServer();
+});

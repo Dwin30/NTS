@@ -1,6 +1,9 @@
+// ============================================
+// services/api.js - Enhanced API Service
+// ============================================
 import axios from 'axios';
 
-const API_URL = 'https://nts-backend-new.onrender.com/api';
+const API_URL = process.env.REACT_APP_API_URL || 'https://nts-backend.onrender.com/api';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -8,7 +11,6 @@ const api = axios.create({
   timeout: 30000,
 });
 
-// Add token to every request
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token');
@@ -20,7 +22,6 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Handle 401 errors - redirect to login
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -44,6 +45,13 @@ export const uploadFile = async (file, onProgress) => {
       }
     }
   });
+  return response.data;
+};
+
+export const uploadAvatar = async (file) => {
+  const formData = new FormData();
+  formData.append('avatar', file);
+  const response = await api.post('/upload/avatar', formData);
   return response.data;
 };
 
